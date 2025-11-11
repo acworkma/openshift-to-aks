@@ -1,0 +1,40 @@
+# Example Migration Configuration
+# This file demonstrates how to configure the migration process
+
+source:
+  context: aro-cluster-context
+  namespace: sample-app
+
+target:
+  context: aks-cluster-context
+  namespace: sample-app
+
+transformations:
+  # Replace image registry references
+  replaceImageRegistry:
+    enabled: true
+    source: "registry.redhat.io"
+    target: "myacr.azurecr.io"
+  
+  # Configure ingress creation from routes
+  createIngress:
+    enabled: true
+    ingressClass: nginx
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+      nginx.ingress.kubernetes.io/rewrite-target: /
+  
+  # Adjust security contexts for AKS
+  adjustSecurityContext:
+    enabled: true
+    runAsNonRoot: true
+
+# Exclude specific resources from migration
+exclude:
+  resourceTypes:
+    - BuildConfig
+    - ImageStream
+    - DeploymentConfig
+  resourceNames:
+    - default-token-*
+    - builder-token-*
