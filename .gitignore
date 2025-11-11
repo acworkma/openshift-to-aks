@@ -205,3 +205,9 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Migration script output
+lab4-migration-script/exported*/
+lab4-migration-script/migration*/
+lab4-migration-script/output*/
+lab4-migration-script/*.log
