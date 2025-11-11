@@ -19,9 +19,14 @@ from typing import Dict, List, Any, Optional
 try:
     from kubernetes import client, config
     from kubernetes.client.rest import ApiException
+    KUBERNETES_AVAILABLE = True
 except ImportError:
-    print("Error: kubernetes package not found. Please run: pip install -r requirements.txt")
-    sys.exit(1)
+    KUBERNETES_AVAILABLE = False
+    # Only show error if not just displaying help
+    if not (len(sys.argv) >= 2 and '-h' in sys.argv or '--help' in sys.argv):
+        print("Error: kubernetes package not found. Please run: pip install -r requirements.txt", file=sys.stderr)
+        if len(sys.argv) > 1:  # Only exit if trying to run a command
+            sys.exit(1)
 
 
 class OpenShiftToAKSMigrator:
@@ -499,6 +504,11 @@ def main():
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
     
     args = parser.parse_args()
+    
+    # Check if kubernetes is available when executing commands
+    if args.command and not KUBERNETES_AVAILABLE:
+        print("Error: kubernetes package not found. Please run: pip install -r requirements.txt", file=sys.stderr)
+        sys.exit(1)
     
     # Configure logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
