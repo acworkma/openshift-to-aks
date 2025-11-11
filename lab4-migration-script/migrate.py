@@ -197,7 +197,8 @@ class OpenShiftToAKSMigrator:
             # Clean annotations
             if 'annotations' in metadata:
                 annotations = metadata['annotations']
-                # Remove OpenShift-specific annotations
+                # Remove OpenShift-specific annotations (annotation keys, not URLs)
+                # This filters out annotations with keys starting with 'openshift.io/'
                 openshift_annotations = [key for key in annotations if key.startswith('openshift.io/')]
                 for key in openshift_annotations:
                     del annotations[key]
