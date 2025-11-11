@@ -1,100 +1,150 @@
-# Azure Lab Repository Guidelines
+# Azure Lab Guidelines
 
-This file defines conventions and a small contract for labs in this repo. It is intended to be used by contributors and automated assistants (e.g., Copilot) to produce consistent, secure, and well-documented lab content.
+Concise contract for creating consistent, secure Azure labs in this repo.
 
-## Directory layout (required)
-Each lab should follow this layout:
+## 1. Directory Layout (required)
 
+```
 labs/
   <service-name>/
     README.md
     infrastructure/
       main.bicep
       parameters.example.json
-      parameters.json (optional, not checked in with secrets)
+      parameters.json        # optional (never commit secrets)
     scripts/
       deploy.sh
-      cleanup.sh
       validate.sh
+      cleanup.sh
     tests/ (optional)
       smoke-test.sh
+```
 
-- Use lowercase with hyphens for folder and file names (e.g., `azure-vm-lab`).
-- Keep Bicep templates in `infrastructure/` and helper scripts in `scripts/`.
+Rules:
+- Folder and file names: lowercase, hyphens (e.g. `azure-vm-lab`).
+- Bicep lives in `infrastructure/`; helper scripts in `scripts/`.
+- Keep labs self-contained (no cross-lab dependencies).
 
-## README requirements
-Every lab README must include:
-- Lab Overview (1–3 short paragraphs)
-- Prerequisites (Azure CLI, roles, optional quotas)
-- Deployment instructions with a one-liner and full command examples
-- Validation steps and expected success criteria
-- Cleanup instructions 
+## 2. README Requirements
 
+Every lab `README.md` MUST include (in order):
+1. Overview (1–3 short paragraphs)
+2. Prerequisites (CLI tools, roles, quotas)
+3. Deployment (one-liner + expanded commands)
+4. Validation (steps + success criteria)
+5. Cleanup (tear-down commands)
+6. (Optional) Troubleshooting (max 3–4 common issues)
 
-## Bicep & ARM templates
-- Prefer Bicep (place in `infrastructure/main.bicep`).
-- Keep `parameters.example.json` as the sanitized example.
-- Add comments describing the purpose and major parameters.
-- Export outputs for critical values (endpoints, IDs) using `output` declarations.
+Formatting:
+- Use fenced code blocks, one command per line.
+- Reference current relative paths (assume user is inside `labs/<lab-name>/`).
+- Explain any `.env.example` usage briefly.
 
-Naming examples:
-- Resource groups: `rg-<service>-lab-<shortid>`
-- Storage accounts: `st<shortunique>`
+## 3. Bicep Templates
 
-## Scripts
-- Scripts must be idempotent (safe to rerun), have clear logs, and return non-zero on failure.
- - Scripts should target Bash/Linux. Document if any other script types are provided; the primary supported scripts must be Bash.
+- Primary template: `infrastructure/main.bicep`
+- Provide `parameters.example.json` (no secrets, sensible sample values).
+- Comment non-obvious parameters.
+- Export critical outputs (`endpoints`, `resourceIds`, etc.).
+- Naming patterns:
+  - Resource group: `rg-<service>-lab-<shortid>`
+  - Storage account: `st<shortunique>`
+- Prefer short, deterministic suffixes (avoid randomness that hinders repeatability).
 
-## Validation & tests
-- Provide `scripts/validate.*` to verify resources and print PASS/FAIL.
-- Optional: unit tests for helpers in `tests/`.
+## 4. Scripts
 
-## Security & Secrets
-- Never commit secrets. Use Key Vault or GitHub secrets for CI.
-- Document which secrets are required (e.g., `AZURE_CLIENT_ID`, etc.).
+Required bash scripts in `scripts/`:
+- `deploy.sh` (idempotent provisioning)
+- `validate.sh` (prints PASS/FAIL; exits non-zero on failure)
+- `cleanup.sh` (idempotent teardown; safe if rerun)
 
-## CI / PR Checklist (suggested)
-- Validate Bicep: `az bicep build --file infrastructure/main.bicep`
-- Run `scripts/validate.*` where possible (or a dry-run smoke check)
-- Ensure `.env.example` exists and `.env` is listed in `.gitignore`.
-- Run secret detection (e.g., `gitleaks detect --source .`) and fail the PR if secrets or `.env` files are committed.
-- Confirm README includes required sections
-- No secrets in PR (use pre-commit/gitleaks)
+Guidelines:
+- `set -euo pipefail`
+- Clear log messages (`[INFO]`, `[ERROR]`, `[PASS]`)
+- Parameterize (env vars or flags) rather than hard-coding values.
+- Never echo secrets.
 
-## Copilot behavior (authoring guidance)
-- Follow repository conventions exactly when generating labs, templates, and scripts.
-- Write concise, accurate README usage examples and one-liner deployment commands.
-- Keep generated scripts idempotent and include validation and cleanup steps.
-- Avoid including hard-coded secrets; use placeholders and clearly mark where secrets should be supplied.
-- Prefer clear in-line comments explaining non-obvious steps.
+## 5. Validation & (Optional) Tests
 
-### README Authoring: DO / AVOID
-The first-time lab user should see only what they need to succeed. Keep historical context out of lab READMEs.
+- `validate.sh` should check key resources (existence, basic readiness).
+- Optional `tests/smoke-test.sh` for a deeper functional check.
+- Keep tests fast (<1–2 minutes).
+
+## 6. Security & Secrets
+
+- Do NOT commit secrets, tokens, certificates, or real subscription IDs.
+- Use placeholders (e.g. `REPLACE_ME_CLIENT_ID`).
+- Document required env vars in README and provide `.env.example`.
+- Ensure `.env` is in `.gitignore`.
+
+## 7. CI / PR Checklist (Suggested)
+
+Include in review (manual or workflow):
+```
+az bicep build --file infrastructure/main.bicep
+scripts/validate.sh
+gitleaks detect --source .
+```
+Verify:
+- README sections present.
+- No secrets / `.env` not committed.
+- `parameters.example.json` exists and is sanitized.
+
+## 8. README Authoring: DO / AVOID
 
 DO:
-- Assume a fresh clone and user working directly inside `labs/<lab-name>/`.
-- Provide: prerequisites, deployment, validation, cleanup, and minimal troubleshooting.
-- Use copyable fenced code blocks (one command per line, no shell prompts).
-- Keep tables compact (e.g., endpoint summaries) and avoid verbose prose.
-- Reference current paths only; ensure examples match actual file locations.
-- Explain environment file handling (`.env.example` vs `.env`) succinctly.
+- Assume fresh clone, user starts in lab root.
+- Provide deploy → validate → cleanup flow.
+- Keep prose minimal; prioritize actionable commands.
+- Use consistent resource naming per contract.
+- Show how to set env vars safely.
 
 AVOID:
-- Mentioning removed or deprecated directories (cleanup belongs in commit history, not README).
-- Long migration stories or internal refactor notes.
+- Long historical/migration narratives.
 - Repeating identical commands in multiple sections.
-- Exposing implementation details better suited for `docs/` (architecture, deep design rationales).
-- Adding warnings already mitigated (e.g., multiple lockfiles) unless user action is required.
-- Embedding secrets or suggesting storing secrets in tracked files.
-- Next Steps Optional Enhancements
+- Architecture deep dives (move those to separate docs if needed).
+- Embedding secrets or suggesting committing them.
+- Unnecessary warnings already mitigated by patterns here.
 
+## 9. Updating an Existing Lab
 
-When updating an existing README:
-1. Re-run validation script and build to confirm examples still work.
-2. Check for broken path aliases or imports after structural changes.
-3. Keep troubleshooting list to the top 3–4 actionable problems.
-4. Avoid adding historical cleanup statements—remove stale references entirely instead.
+Before modifying a lab:
+1. Run `deploy.sh` then `validate.sh` (ensure still works).
+2. Adjust README paths if structure changes.
+3. Re-check outputs exported by Bicep after edits.
+4. Trim any stale troubleshooting entries.
 
+## 10. Quick Starter Template (Optional Copy/Paste)
 
+```
+# <Lab Name> Lab
 
-By following these rules contributors and automation will produce consistent, secure, and testable labs across this repository.
+## Overview
+<Brief purpose>
+
+## Prerequisites
+- Azure CLI
+- Role: <e.g. Contributor>
+- Quota: <if needed>
+
+## Deployment
+```bash
+az group create --name rg-<service>-lab-<id> --location <region>
+./scripts/deploy.sh
+```
+
+## Validation
+```bash
+./scripts/validate.sh
+```
+Expected: PASS and printed endpoint.
+
+## Cleanup
+```bash
+./scripts/cleanup.sh
+```
+```
+
+---
+
+By following these rules, contributed labs remain consistent, secure, and easy to validate.
