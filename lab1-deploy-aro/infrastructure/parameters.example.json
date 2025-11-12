@@ -1,0 +1,19 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+  "location": { "value": "westus3" },
+    "clusterName": { "value": "aro-cluster" },
+    "vnetAddressPrefix": { "value": "10.0.0.0/22" },
+    "masterSubnetPrefix": { "value": "10.0.0.0/23" },
+    "workerSubnetPrefix": { "value": "10.0.2.0/23" },
+    "domain": { "value": "" },
+    "pullSecret": { "value": "REPLACE_ME_PULL_SECRET_OR_LEAVE_EMPTY" },
+    "spClientId": { "value": "REPLACE_ME_CLIENT_ID" },
+    "spClientSecret": { "value": "REPLACE_ME_CLIENT_SECRET" },
+    "workerVmSize": { "value": "Standard_D4s_v3" },
+    "workerCount": { "value": 3 },
+    "masterVmSize": { "value": "Standard_D8s_v3" },
+    "internalSuffix": { "value": "int" }
+  }
+}
