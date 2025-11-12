@@ -55,6 +55,22 @@ if ! command -v az >/dev/null 2>&1; then
   err "Azure CLI (az) not found on PATH"; exit 1
 fi
 
+# Pre-deployment validation
+log "Running pre-deployment validation..."
+# Check if logged in to Azure
+if ! az account show >/dev/null 2>&1; then
+  err "Not logged in to Azure. Run: az login"
+  exit 1
+fi
+
+# Verify location is valid
+if ! az account list-locations --query "[?name=='$LOCATION'].name" -o tsv | grep -q "$LOCATION"; then
+  err "Invalid location: $LOCATION"
+  err "List valid locations: az account list-locations -o table"
+  exit 1
+fi
+pass "Azure login and location validated"
+
 log "Registering required resource providers (idempotent)..."
 az provider register -n Microsoft.RedHatOpenShift >/dev/null || true
 az provider register -n Microsoft.Compute >/dev/null || true
@@ -67,6 +83,19 @@ if ! az group show -n "$ARO_RG" >/dev/null 2>&1; then
   log "Created resource group $ARO_RG"
 else
   log "Resource group already exists"
+fi
+
+# Auto-detect valid OpenShift version if not specified
+if [[ -z "$OPENSHIFT_VERSION" ]]; then
+  log "No OPENSHIFT_VERSION specified; querying available versions for region $LOCATION..."
+  AVAILABLE_VERSIONS=$(az aro get-versions -l "$LOCATION" --query "[-3:]" -o tsv 2>/dev/null || true)
+  if [[ -n "$AVAILABLE_VERSIONS" ]]; then
+    # Pick the latest stable version (last one from the list)
+    OPENSHIFT_VERSION=$(echo "$AVAILABLE_VERSIONS" | tail -1)
+    log "Auto-selected OpenShift version: $OPENSHIFT_VERSION"
+  else
+    log "Could not query available versions; will proceed with default (may fail if region doesn't support it)"
+  fi
 fi
 
 # Function: ensure Network Contributor role for ARO Resource Provider SP on VNet scope
@@ -139,6 +168,11 @@ if az aro show -g "$ARO_RG" -n "$CLUSTER_NAME" >/dev/null 2>&1; then
   log "Cluster '$CLUSTER_NAME' already exists; skipping creation."
 else
   log "Creating ARO cluster via az aro create (may take 30-40 minutes)..."
+  log "Configuration: Region=$LOCATION, Workers=$WORKER_COUNT x $WORKER_VM_SIZE, Masters=$MASTER_VM_SIZE"
+  [[ -n "$OPENSHIFT_VERSION" ]] && log "OpenShift version: $OPENSHIFT_VERSION" || log "OpenShift version: default latest"
+  
+  set +e
+  ARO_CREATE_OUTPUT=$(mktemp)
   az aro create \
     --resource-group "$ARO_RG" \
     --name "$CLUSTER_NAME" \
@@ -151,7 +185,26 @@ else
     --master-vm-size "$MASTER_VM_SIZE" \
     --worker-vm-size "$WORKER_VM_SIZE" \
     ${OPENSHIFT_VERSION:+--version "$OPENSHIFT_VERSION"} \
-    --output none || { err "az aro create failed."; exit 1; }
+    --output json > "$ARO_CREATE_OUTPUT" 2>&1
+  CREATE_EXIT=$?
+  set -e
+  
+  if [[ $CREATE_EXIT -ne 0 ]]; then
+    err "az aro create failed with exit code $CREATE_EXIT"
+    if [[ -f "$ARO_CREATE_OUTPUT" ]]; then
+      err "Error details:"
+      cat "$ARO_CREATE_OUTPUT" >&2
+      rm -f "$ARO_CREATE_OUTPUT"
+    fi
+    err ""
+    err "Troubleshooting steps:"
+    err "  1. Verify service principal credentials are valid"
+    err "  2. Check region capacity: az vm list-skus -l $LOCATION -o table | grep -E 'Standard_D4s_v3|Standard_D8s_v3'"
+    err "  3. Verify OpenShift version availability: az aro get-versions -l $LOCATION"
+    err "  4. Check quota limits in the Azure Portal"
+    exit 1
+  fi
+  rm -f "$ARO_CREATE_OUTPUT"
   pass "Cluster create command submitted."
 fi
 

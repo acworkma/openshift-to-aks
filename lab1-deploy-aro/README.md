@@ -13,7 +13,7 @@ Azure Red Hat OpenShift is a jointly engineered, managed OpenShift service by Mi
 - (Optional) Service Principal (if not using managed identity) — store client secret securely
 
 ## Deployment
-Quick start (recommended script flow) – defaults now target `westus3`:
+Quick start (recommended script flow) – defaults now target `centralus`:
 
 ```bash
 cd lab1-deploy-aro/
@@ -32,11 +32,11 @@ The script will:
 You can run the Bicep template directly:
 
 ```bash
-az group create --name $ARO_RG --location westus3
+az group create --name $ARO_RG --location centralus
 az deployment group create \
   --resource-group $ARO_RG \
   --template-file infrastructure/main.bicep \
-  --parameters location=westus3 clusterName=$CLUSTER_NAME workerCount=3
+  --parameters location=centralus clusterName=$CLUSTER_NAME workerCount=3
 ```
 
 ### Legacy ARM Template (optional)
@@ -127,13 +127,44 @@ az group delete -n $ARO_RG --yes
 | `az aro show` returns NotFound | Cluster still provisioning | Wait and retry `./scripts/validate.sh` every few minutes. |
 | `oc login` fails TLS | Insecure cert during early provisioning | Use `--insecure-skip-tls-verify` temporarily; remove once cluster stabilizes. |
 | Missing kubeadmin password | Credentials not yet issued | Retry `az aro list-credentials` after a few minutes. |
+| Invalid OpenShift version error | Specified version not available in region | Leave `OPENSHIFT_VERSION` blank for auto-detection or check available versions: `az aro get-versions -l $LOCATION` |
+| VM size not available | Insufficient capacity in region | Try different region (centralus typically has better availability) or different VM sizes |
+| Cluster creation fails | Various reasons (quota, capacity, config) | Check error output from script; verify service principal credentials, check quota limits, review troubleshooting steps in error message |
+| Network deployment fails | Parameter or permission issues | Verify Bicep syntax: `az bicep build --file infrastructure/main.bicep`, check service principal has Contributor role |
+
+### Common Deployment Failures
+
+**OpenShift Version Errors:**
+The deploy script now auto-detects available OpenShift versions for your region. If you still encounter version errors:
+- Check available versions: `az aro get-versions -l centralus`
+- Ensure your Azure CLI is up to date: `az upgrade`
+
+**Regional Capacity Issues:**
+If deployment fails due to capacity issues in one region:
+- Try centralus (generally better availability)
+- Check VM SKU availability: `az vm list-skus -l centralus -o table | grep -E 'Standard_D4s_v3|Standard_D8s_v3'`
+- Consider alternative VM sizes if needed
+
+**Service Principal Issues:**
+- Verify SP credentials are valid: `az ad sp show --id $SP_CLIENT_ID`
+- Ensure SP has Contributor role on subscription
+- Or use `AUTO_CREATE_SP=true` to have the script create one automatically
+
+**Monitoring Long-Running Deployments:**
+Use the monitor script to track cluster provisioning:
+```bash
+./scripts/monitor.sh
+```
+
+This will continuously poll the cluster state and notify you when provisioning completes or fails.
 
 ## Files & Structure
 - `infrastructure/main.bicep` – Bicep template for network + cluster
-- `infrastructure/parameters.example.json` – Sanitized sample parameter set
-- `scripts/deploy.sh` – Idempotent provisioning script
+- `infrastructure/parameters.example.json` – Sanitized sample parameter set (centralus region)
+- `scripts/deploy.sh` – Idempotent provisioning script with auto-version detection
 - `scripts/validate.sh` – Cluster readiness checks
 - `scripts/cleanup.sh` – Safe teardown
+- `scripts/monitor.sh` – Real-time cluster provisioning monitor
 - `.env.example` – Environment variable scaffolding (copy to `.env`)
 - `deploy-aro.json` – Legacy ARM template (alternative)
 
