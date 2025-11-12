@@ -216,3 +216,6 @@ lab4-migration-script/*.log
 parameters.json
 *.bak
 *.swp
+
+# Bicep build artifacts (generated .json files from .bicep)
+**/infrastructure/main.json
