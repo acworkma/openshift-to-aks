@@ -177,7 +177,8 @@ class OpenShiftToAKSMigrator:
         self.logger.info(f"Export complete. Files saved to: {output_dir}")
         return export_data
     
-    def transform_resource(self, resource: Dict[str, Any]) -> Dict[str, Any]:
+    def transform_resource(self, resource: Dict[str, Any], registry_rewrite: Optional[str] = None,
+                           target_namespace: Optional[str] = None) -> Dict[str, Any]:
         """
         Transform OpenShift resource to AKS-compatible format
         
@@ -203,8 +204,42 @@ class OpenShiftToAKSMigrator:
                 for key in openshift_annotations:
                     del annotations[key]
         
+        # Namespace remap
+        if target_namespace and 'metadata' in resource and 'namespace' in resource['metadata']:
+            resource['metadata']['namespace'] = target_namespace
+
         # Remove status field
         resource.pop('status', None)
+
+        # Image registry rewrite for deployments/statefulsets
+        try:
+            if registry_rewrite and resource.get('kind') in ['Deployment', 'StatefulSet']:
+                containers = resource.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                for c in containers:
+                    image = c.get('image')
+                    if image and '/' in image:
+                        # Replace first segment (registry) with provided one
+                        parts = image.split('/')
+                        parts[0] = registry_rewrite.rstrip('/')
+                        c['image'] = '/'.join(parts)
+        except Exception:
+            pass
+
+        # Strip clusterIP from services (must not be set when applying new)
+        if resource.get('kind') == 'Service':
+            spec = resource.get('spec', {})
+            spec.pop('clusterIP', None)
+            spec.pop('clusterIPs', None)
+            # Map OpenShift Service types if needed (NodePort -> LoadBalancer optional)
+            if spec.get('type') == 'ClusterIP':
+                # leave as-is
+                pass
+            elif spec.get('type') == 'LoadBalancer':
+                # keep; ensure no status remnants
+                pass
+            elif spec.get('type') == 'NodePort':
+                # Optionally keep NodePort; nothing to change now.
+                pass
         
         return resource
     
@@ -276,7 +311,9 @@ class OpenShiftToAKSMigrator:
         
         return ingress
     
-    def migrate_application(self, namespace: str, output_dir: str, apply: bool = False) -> bool:
+    def migrate_application(self, namespace: str, output_dir: str, apply: bool = False,
+                             registry_rewrite: Optional[str] = None,
+                             target_namespace: Optional[str] = None) -> bool:
         """
         Migrate application from OpenShift to AKS
         
@@ -302,7 +339,7 @@ class OpenShiftToAKSMigrator:
             with open(source_dir / 'deployments.yaml', 'r') as f:
                 deployments = list(yaml.safe_load_all(f))
             
-            transformed_deployments = [self.transform_resource(d) for d in deployments if d]
+            transformed_deployments = [self.transform_resource(d, registry_rewrite, target_namespace) for d in deployments if d]
             
             with open(aks_output / 'deployments.yaml', 'w') as f:
                 yaml.dump_all(transformed_deployments, f, default_flow_style=False)
@@ -312,7 +349,7 @@ class OpenShiftToAKSMigrator:
             with open(source_dir / 'services.yaml', 'r') as f:
                 services = list(yaml.safe_load_all(f))
             
-            transformed_services = [self.transform_resource(s) for s in services if s]
+            transformed_services = [self.transform_resource(s, registry_rewrite, target_namespace) for s in services if s]
             
             with open(aks_output / 'services.yaml', 'w') as f:
                 yaml.dump_all(transformed_services, f, default_flow_style=False)
@@ -322,7 +359,7 @@ class OpenShiftToAKSMigrator:
             with open(source_dir / 'configmaps.yaml', 'r') as f:
                 configmaps = list(yaml.safe_load_all(f))
             
-            transformed_configmaps = [self.transform_resource(cm) for cm in configmaps if cm]
+            transformed_configmaps = [self.transform_resource(cm, registry_rewrite, target_namespace) for cm in configmaps if cm]
             
             with open(aks_output / 'configmaps.yaml', 'w') as f:
                 yaml.dump_all(transformed_configmaps, f, default_flow_style=False)
@@ -343,7 +380,7 @@ class OpenShiftToAKSMigrator:
             with open(source_dir / 'secrets.yaml', 'r') as f:
                 secrets = list(yaml.safe_load_all(f))
             
-            transformed_secrets = [self.transform_resource(s) for s in secrets if s]
+            transformed_secrets = [self.transform_resource(s, registry_rewrite, target_namespace) for s in secrets if s]
             
             with open(aks_output / 'secrets.yaml', 'w') as f:
                 yaml.dump_all(transformed_secrets, f, default_flow_style=False)
@@ -500,6 +537,8 @@ def main():
     migrate_parser.add_argument('--target-context', help='Kubernetes context for AKS cluster')
     migrate_parser.add_argument('--output', required=True, help='Output directory for migrated resources')
     migrate_parser.add_argument('--apply', action='store_true', help='Apply resources to AKS')
+    migrate_parser.add_argument('--registry-rewrite', help='Rewrite container image registry (e.g. myregistry.azurecr.io)')
+    migrate_parser.add_argument('--target-namespace', help='Namespace to use on AKS (defaults to source)')
     
     # Global options
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
@@ -528,7 +567,9 @@ def main():
             source_context=args.source_context,
             target_context=args.target_context
         )
-        success = migrator.migrate_application(args.namespace, args.output, args.apply)
+        success = migrator.migrate_application(args.namespace, args.output, args.apply,
+                               registry_rewrite=args.registry_rewrite,
+                               target_namespace=args.target_namespace or args.namespace)
         if not success:
             sys.exit(1)
     
