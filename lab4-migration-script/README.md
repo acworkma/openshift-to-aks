@@ -1,109 +1,95 @@
-# Lab 4: Migration Script - OpenShift to AKS
+# Lab 4: Migration Script — OpenShift to AKS
 
-This lab provides a Python script to document applications in OpenShift and migrate them to Azure Kubernetes Service (AKS).
+This lab provides a Python script to document applications in OpenShift and migrate them to Azure Kubernetes Service (AKS). It exports OpenShift resources, transforms them into AKS-compatible manifests, and can optionally apply them to an AKS cluster.
 
 ## Prerequisites
 
-- Completed [Lab 1](../lab1-deploy-aro/README.md) - ARO cluster deployed
-- Completed [Lab 2](../lab2-deploy-app-openshift/README.md) - Sample app deployed to OpenShift
-- Completed [Lab 3](../lab3-deploy-aks/README.md) - AKS cluster deployed
 - Python 3.8 or higher
-- `oc` CLI configured for OpenShift cluster
-- `kubectl` CLI configured for AKS cluster
+- `kubectl` and (optional) `oc` installed
+- Kubeconfig contexts for your OpenShift source and AKS target clusters
+- Recommended: complete Lab 2 (sample app on OpenShift) and Lab 3 (AKS cluster)
 
-## Installation
-
-### 1. Install Dependencies
+## Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Set Up Kubeconfig
-
-Ensure you have access to both clusters:
+## Configure Contexts
 
 ```bash
-# Configure OpenShift context
+# Login to OpenShift (optional if kubeconfig already set)
 oc login <openshift-api-url> -u <username> -p <password>
 
-# Configure AKS context
+# Get AKS credentials
 az aks get-credentials --resource-group <rg> --name <aks-cluster>
 
-# Verify contexts
+# Verify
 kubectl config get-contexts
 ```
 
 ## Script Overview
 
-The migration script (`migrate.py`) provides the following functionality:
-
-1. **Document OpenShift Application**: Extract all resources for an application
-2. **Transform Resources**: Convert OpenShift-specific resources to standard Kubernetes
-3. **Generate AKS Manifests**: Create AKS-compatible manifests
-4. **Deploy to AKS**: Apply the transformed resources to AKS
+`migrate.py` provides:
+- Document: export Deployments, Services, ConfigMaps, Secrets, and Routes from OpenShift
+- Transform: convert to AKS-compatible manifests
+  - Routes → Ingress (nginx class)
+  - Strip `clusterIP/clusterIPs` from Services
+  - Remove non-portable metadata and `status`
+  - Optional: rewrite container image registry
+  - Optional: remap namespace
+- Apply: optionally create resources on AKS
 
 ## Usage
 
-### Basic Usage
+### Document an OpenShift application
 
 ```bash
-# Document an OpenShift application
 python migrate.py document \
   --namespace sample-app \
-  --output ./output
+  --output ./output \
+  [--context <openshift-context>]
+```
 
-# Transform and deploy to AKS
+### Migrate (transform) and optionally apply to AKS
+
+```bash
+# Basic migration without registry rewrite
 python migrate.py migrate \
   --namespace sample-app \
   --source-context <openshift-context> \
   --target-context <aks-context> \
   --output ./migrated
-```
 
-### Command Reference
-
-#### Document Command
-
-Extract and document OpenShift resources:
-
-```bash
-python migrate.py document \
-  --namespace <namespace> \
-  --output <output-directory> \
-  [--context <openshift-context>]
-```
-
-#### Migrate Command
-
-Migrate application from OpenShift to AKS:
-
-```bash
+# Migrate with registry rewrite (images point to ACR)
 python migrate.py migrate \
-  --namespace <namespace> \
+  --namespace sample-app \
   --source-context <openshift-context> \
   --target-context <aks-context> \
-  --output <output-directory> \
-  [--apply]
+  --output ./migrated \
+  --registry-rewrite myacr.azurecr.io \
+  --apply
+
+# Migrate into a different namespace on AKS
+python migrate.py migrate \
+  --namespace sample-app \
+  --source-context <openshift-context> \
+  --target-context <aks-context> \
+  --output ./migrated \
+  --target-namespace sample-app-prod \
+  --apply
 ```
 
-Options:
-- `--apply`: Automatically apply the transformed resources to AKS
-- `--dry-run`: Show what would be done without making changes
+### Options
 
-#### Transform Command
+- `--apply`: apply transformed resources to AKS
+- `--registry-rewrite <registry>`: replace the registry portion of container images (e.g., `myacr.azurecr.io`)
+- `--target-namespace <ns>`: override the namespace used in output and AKS deployment
+- `--verbose` / `-v`: enable verbose logging
 
-Transform OpenShift manifests to AKS-compatible format:
+## Migration Flow
 
-```bash
-python migrate.py transform \
-  --input <openshift-manifest.yaml> \
-  --output <aks-manifest.yaml>
-```
-
-## Migration Process
-
-### Step 1: Document the OpenShift Application
+### Step 1: Document the OpenShift application
 
 ```bash
 python migrate.py document \
@@ -111,45 +97,26 @@ python migrate.py document \
   --output ./openshift-export
 ```
 
-This creates:
-- `deployments.yaml` - All deployments
-- `services.yaml` - All services
-- `routes.yaml` - All routes (OpenShift-specific)
-- `configmaps.yaml` - All ConfigMaps
-- `secrets.yaml` - All secrets
-- `migration-report.json` - Metadata about the export
+Generated files:
+- `deployments.yaml`, `services.yaml`, `configmaps.yaml`, `secrets.yaml`, `routes.yaml` (if present)
+- `migration-report.json` — summary of exported counts
 
-### Step 2: Review the Export
+### Step 2: Migrate (transform) resources
 
-```bash
-ls -la ./openshift-export/
-cat ./openshift-export/migration-report.json
-```
+Transformation happens automatically inside `migrate`:
+- Routes → Ingress (nginx class)
+- Services: strip `clusterIP/clusterIPs`
+- All resources: remove non-portable metadata and `status`
+- Images: optionally rewrite registry via `--registry-rewrite`
+- Namespace: optionally override via `--target-namespace`
 
-### Step 3: Transform Resources
+Outputs:
+- `output/source/` — raw export from OpenShift
+- `output/aks/` — transformed manifests for AKS
 
-The script automatically transforms:
-- **Routes → Ingress**: Converts OpenShift Routes to Kubernetes Ingress
-- **DeploymentConfigs → Deployments**: Converts to standard Deployments
-- **Image References**: Updates to use appropriate registries
-- **Security Context**: Adjusts security contexts for AKS
+### Step 3: Deploy to AKS (optional)
 
 ```bash
-python migrate.py transform \
-  --input ./openshift-export \
-  --output ./aks-manifests
-```
-
-### Step 4: Deploy to AKS
-
-```bash
-# Switch to AKS context
-kubectl config use-context <aks-context>
-
-# Create namespace
-kubectl create namespace sample-app
-
-# Apply the transformed manifests
 python migrate.py migrate \
   --namespace sample-app \
   --source-context <openshift-context> \
@@ -158,98 +125,25 @@ python migrate.py migrate \
   --apply
 ```
 
-### Step 5: Verify the Migration
+### Step 4: Validate on AKS
 
 ```bash
-# Check deployments
 kubectl get deployments -n sample-app
-
-# Check pods
 kubectl get pods -n sample-app
-
-# Check services
 kubectl get svc -n sample-app
-
-# Check ingress
 kubectl get ingress -n sample-app
 ```
 
-## Configuration File
+## Notes on Secrets
 
-Create a `migration-config.yaml` to customize the migration:
-
-```yaml
-source:
-  context: openshift-context
-  namespace: sample-app
-
-target:
-  context: aks-context
-  namespace: sample-app
-
-transformations:
-  replaceImageRegistry:
-    enabled: true
-    source: "registry.redhat.io"
-    target: "myacr.azurecr.io"
-  
-  createIngress:
-    enabled: true
-    ingressClass: nginx
-    annotations:
-      cert-manager.io/cluster-issuer: letsencrypt-prod
-  
-  adjustSecurityContext:
-    enabled: true
-    runAsNonRoot: true
-
-exclude:
-  resourceTypes:
-    - BuildConfig
-    - ImageStream
-  resourceNames:
-    - default-token-*
-```
-
-Use with:
-
-```bash
-python migrate.py migrate --config migration-config.yaml
-```
-
-## Advanced Features
-
-### Selective Migration
-
-Migrate specific resources:
-
-```bash
-python migrate.py migrate \
-  --namespace sample-app \
-  --resources deployment/sample-app,service/sample-app \
-  --target-context aks-context
-```
-
-### Generate Helm Chart
-
-Convert the application to a Helm chart:
-
-```bash
-python migrate.py helm \
-  --namespace sample-app \
-  --output ./helm-chart
-```
+Secrets are exported and transformed (metadata cleanup only). Review and update them as needed before applying to AKS (e.g., image pull secrets for ACR).
 
 ## Troubleshooting
 
-### Common Issues
-
-1. **Authentication Errors**: Ensure you're logged into both clusters
-2. **Context Not Found**: Verify context names with `kubectl config get-contexts`
-3. **Permission Denied**: Ensure you have appropriate RBAC permissions
-4. **Image Pull Errors**: Update image references or configure image pull secrets
-
-### Verbose Logging
+- Authentication: ensure contexts are configured (`kubectl config get-contexts`)
+- RBAC: verify permissions on both clusters
+- Image pulls: rewrite registry (`--registry-rewrite`) and configure image pull secrets
+- Verbose logs: add `--verbose` to `migrate` or `document`
 
 ```bash
 python migrate.py migrate \
@@ -259,37 +153,7 @@ python migrate.py migrate \
   --verbose
 ```
 
-## Manual Verification Steps
-
-After migration, verify:
-
-1. **Pods are running**: `kubectl get pods -n sample-app`
-2. **Services are created**: `kubectl get svc -n sample-app`
-3. **Ingress is configured**: `kubectl get ingress -n sample-app`
-4. **Application is accessible**: Test the application endpoint
-
-## Rollback
-
-If migration fails:
-
-```bash
-# Delete the namespace in AKS
-kubectl delete namespace sample-app
-
-# Re-run the migration with fixes
-python migrate.py migrate ... --apply
-```
-
 ## Additional Resources
 
-- [Script Documentation](./SCRIPT.md)
-- [Kubernetes API Reference](https://kubernetes.io/docs/reference/)
-- [AKS Best Practices](https://docs.microsoft.com/azure/aks/best-practices)
-
-## Next Steps
-
-After successful migration:
-1. Configure monitoring and logging
-2. Set up CI/CD pipelines for AKS
-3. Configure backup and disaster recovery
-4. Optimize resource requests and limits
+- Kubernetes API Reference: https://kubernetes.io/docs/reference/
+- AKS Best Practices: https://learn.microsoft.com/azure/aks/best-practices
