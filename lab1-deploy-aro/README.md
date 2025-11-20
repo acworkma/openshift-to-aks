@@ -25,85 +25,30 @@ Azure Red Hat OpenShift is a fully managed OpenShift service jointly engineered 
 
 ## Deployment Steps
 
-### 1. Set Environment Variables
+### 1. Deploy ARO Using Managed Identity
 
+This lab uses a managed identity deployment pattern. Follow the comprehensive guide from the Azure Red Hat OpenShift Virtualization repository:
+
+**[Azure Red Hat OpenShift Virtualization - Managed Identity Deployment](https://github.com/heisthesisko/Azure_RedHat_OpenShift_Virtualization)**
+
+The external repository provides:
+- Automated setup of resource providers, resource groups, and virtual networks
+- Managed identity configuration for secure, passwordless authentication
+- ARO cluster deployment with best-practice networking
+- OpenShift Virtualization features and configuration
+
+Clone and follow the instructions in that repository to provision your ARO cluster. Once deployment completes, return here to proceed with credential retrieval and validation.
+
+**Quick start:**
 ```bash
-export LOCATION=eastus
-export RESOURCEGROUP=aro-rg
-export CLUSTER=aro-cluster
-export VNET_NAME=aro-vnet
-export MASTER_SUBNET=master-subnet
-export WORKER_SUBNET=worker-subnet
+git clone https://github.com/heisthesisko/Azure_RedHat_OpenShift_Virtualization.git
+cd Azure_RedHat_OpenShift_Virtualization
+# Follow the README deployment instructions
 ```
 
-### 2. Register Required Resource Providers
+> **Note**: The managed identity approach eliminates the need for service principal credentials and provides enhanced security and operational simplicity. Deployment typically takes 30-40 minutes.
 
-```bash
-az provider register -n Microsoft.RedHatOpenShift --wait
-az provider register -n Microsoft.Compute --wait
-az provider register -n Microsoft.Storage --wait
-az provider register -n Microsoft.Authorization --wait
-```
-
-### 3. Create Resource Group
-
-```bash
-az group create \
-  --name $RESOURCEGROUP \
-  --location $LOCATION
-```
-
-### 4. Create Virtual Network
-
-```bash
-az network vnet create \
-  --resource-group $RESOURCEGROUP \
-  --name $VNET_NAME \
-  --address-prefixes 10.0.0.0/22
-
-az network vnet subnet create \
-  --resource-group $RESOURCEGROUP \
-  --vnet-name $VNET_NAME \
-  --name $MASTER_SUBNET \
-  --address-prefixes 10.0.0.0/23 \
-  --service-endpoints Microsoft.ContainerRegistry
-
-az network vnet subnet create \
-  --resource-group $RESOURCEGROUP \
-  --vnet-name $VNET_NAME \
-  --name $WORKER_SUBNET \
-  --address-prefixes 10.0.2.0/23 \
-  --service-endpoints Microsoft.ContainerRegistry
-```
-
-### 5. Disable Subnet Private Endpoint Policies
-
-```bash
-az network vnet subnet update \
-  --name $MASTER_SUBNET \
-  --resource-group $RESOURCEGROUP \
-  --vnet-name $VNET_NAME \
-  --disable-private-link-service-network-policies true
-```
-
-### 6. Create the ARO Cluster
-
-```bash
-az aro create \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER \
-  --vnet $VNET_NAME \
-  --master-subnet $MASTER_SUBNET \
-  --worker-subnet $WORKER_SUBNET \
-  --apiserver-visibility Public \
-  --ingress-visibility Public
-```
-
-Note: This can take 30-40 minutes to complete.
-
-> Managed Identity Variant: For a deployment pattern that leverages managed identity and virtualization features, see the external lab here: [Azure Red Hat OpenShift Virtualization (Managed Identity)](https://github.com/heisthesisko/Azure_RedHat_OpenShift_Virtualization/tree/main). You can adapt its identity setup prior to running `az aro create` in this lab.
-
-### 7. Get Cluster Credentials
+### 2. Get Cluster Credentials
 
 ```bash
 # Get the console URL
@@ -124,7 +69,7 @@ az aro list-credentials \
   --resource-group $RESOURCEGROUP
 ```
 
-### 8. Log in to the Cluster
+### 3. Log in to the Cluster
 
 ```bash
 # Get credentials
