@@ -38,6 +38,10 @@ for p in Microsoft.RedHatOpenShift Microsoft.Compute Microsoft.Storage Microsoft
   fi
 done
 
+# Global VM SKU availability snapshot for Standard_D8s_v5 (user-requested check)
+log "Listing global SKU availability for Standard_D8s_v5 (may include restricted regions)"
+az vm list-skus --size Standard_D8s_v5 --all -o table | head -n 30 || err "Failed to list Standard_D8s_v5 SKU"
+
 for REGION in "${REGIONS[@]}"; do
   echo "--- [REGION] $REGION ---"
   log "Retrieving available OpenShift versions..."

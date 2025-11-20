@@ -9,6 +9,16 @@ This lab guides you through deploying an Azure Red Hat OpenShift (ARO) cluster.
 - Contributor access to the Azure subscription
 - Red Hat pull secret (optional but recommended)
 
+### (Optional) VM Size Availability Preflight
+
+Before deploying, confirm the target master/worker VM size is available in your subscription/regions. Example for `Standard_D8s_v5`:
+
+```bash
+az vm list-skus --size Standard_D8s_v5 --all --output table
+```
+
+If the size shows restrictions for your desired region, choose a fallback (e.g. `Standard_D8s_v4`, `Standard_D8s_v3`) or run the provided `scripts/preflight.sh` which performs multi-region size and quota checks.
+
 ## Architecture Overview
 
 Azure Red Hat OpenShift is a fully managed OpenShift service jointly engineered and supported by Microsoft and Red Hat.
@@ -91,6 +101,8 @@ az aro create \
 
 Note: This can take 30-40 minutes to complete.
 
+> Managed Identity Variant: For a deployment pattern that leverages managed identity and virtualization features, see the external lab here: [Azure Red Hat OpenShift Virtualization (Managed Identity)](https://github.com/heisthesisko/Azure_RedHat_OpenShift_Virtualization/tree/main). You can adapt its identity setup prior to running `az aro create` in this lab.
+
 ### 7. Get Cluster Credentials
 
 ```bash
@@ -155,6 +167,8 @@ az group delete --name $RESOURCEGROUP --yes
 ## Next Steps
 
 Proceed to [Lab 2](../lab2-deploy-app-openshift/README.md) to deploy a sample application to your ARO cluster.
+
+Explore a managed identity & virtualization deployment pattern: [Azure_RedHat_OpenShift_Virtualization](https://github.com/heisthesisko/Azure_RedHat_OpenShift_Virtualization/tree/main)
 
 ## Additional Resources
 
