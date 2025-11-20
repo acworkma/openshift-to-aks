@@ -48,13 +48,7 @@ Expect JSON `{"status":"ok" ...}`.
 ls exported/
 ```
 
-## 6. Scale (Optional)
-```bash
-oc scale deployment/nextjs-sample --replicas=3
-oc get pods -l app=nextjs-sample
-```
-
-## 7. Cleanup
+## 6. Cleanup
 ```bash
 ./scripts/cleanup.sh
 ```
