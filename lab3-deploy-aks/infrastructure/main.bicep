@@ -1,0 +1,137 @@
+// TEMPORARY: ARM template content copied from deploy-aks.json. To be converted to Bicep.
+// See parameters.example.json for sample parameters.
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "clusterName": {
+      "type": "string",
+      "defaultValue": "aks-cluster",
+      "metadata": {
+        "description": "The name of the AKS cluster"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "The location of the AKS cluster"
+      }
+    },
+    "dnsPrefix": {
+      "type": "string",
+      "defaultValue": "[concat(parameters('clusterName'), '-dns')]",
+      "metadata": {
+        "description": "Optional DNS prefix to use with hosted Kubernetes API server FQDN"
+      }
+    },
+    "nodeCount": {
+      "type": "int",
+      "defaultValue": 3,
+      "minValue": 1,
+      "maxValue": 50,
+      "metadata": {
+        "description": "The number of nodes for the cluster"
+      }
+    },
+    "nodeVMSize": {
+      "type": "string",
+      "defaultValue": "Standard_D2s_v3",
+      "metadata": {
+        "description": "The size of the Virtual Machine"
+      }
+    },
+    "kubernetesVersion": {
+      "type": "string",
+      "defaultValue": "1.27.7",
+      "metadata": {
+        "description": "The version of Kubernetes"
+      }
+    },
+    "enableAutoScaling": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable cluster autoscaler"
+      }
+    },
+    "minNodeCount": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Minimum number of nodes for auto-scaling"
+      }
+    },
+    "maxNodeCount": {
+      "type": "int",
+      "defaultValue": 5,
+      "metadata": {
+        "description": "Maximum number of nodes for auto-scaling"
+      }
+    },
+    "networkPlugin": {
+      "type": "string",
+      "defaultValue": "azure",
+      "allowedValues": [
+        "azure",
+        "kubenet"
+      ],
+      "metadata": {
+        "description": "Network plugin used for building Kubernetes network"
+      }
+    },
+    "enableRBAC": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable RBAC on the AKS cluster"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.ContainerService/managedClusters",
+      "apiVersion": "2023-05-01",
+      "name": "[parameters('clusterName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "dnsPrefix": "[parameters('dnsPrefix')]",
+        "kubernetesVersion": "[parameters('kubernetesVersion')]",
+        "enableRBAC": "[parameters('enableRBAC')]",
+        "agentPoolProfiles": [
+          {
+            "name": "agentpool",
+            "count": "[parameters('nodeCount')]",
+            "vmSize": "[parameters('nodeVMSize')]",
+            "osType": "Linux",
+            "mode": "System",
+            "enableAutoScaling": "[parameters('enableAutoScaling')]",
+            "minCount": "[if(parameters('enableAutoScaling'), parameters('minNodeCount'), json('null'))]",
+            "maxCount": "[if(parameters('enableAutoScaling'), parameters('maxNodeCount'), json('null'))]",
+            "type": "VirtualMachineScaleSets"
+          }
+        ],
+        "networkProfile": {
+          "networkPlugin": "[parameters('networkPlugin')]",
+          "loadBalancerSku": "standard",
+          "serviceCidr": "10.0.0.0/16",
+          "dnsServiceIP": "10.0.0.10",
+          "dockerBridgeCidr": "172.17.0.1/16"
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "controlPlaneFQDN": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))).fqdn]"
+    },
+    "clusterName": {
+      "type": "string",
+      "value": "[parameters('clusterName')]"
+    }
+  }
+}

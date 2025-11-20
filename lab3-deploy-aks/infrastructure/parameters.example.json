@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "clusterName": {
+      "value": "aks-lab-001"
+    },
+    "location": {
+      "value": "eastus"
+    },
+    "dnsPrefix": {
+      "value": "aks-lab-001-dns"
+    },
+    "nodeCount": {
+      "value": 3
+    },
+    "nodeVMSize": {
+      "value": "Standard_D2s_v3"
+    },
+    "kubernetesVersion": {
+      "value": "1.27.7"
+    },
+    "enableAutoScaling": {
+      "value": true
+    },
+    "minNodeCount": {
+      "value": 1
+    },
+    "maxNodeCount": {
+      "value": 5
+    },
+    "networkPlugin": {
+      "value": "azure"
+    },
+    "enableRBAC": {
+      "value": true
+    }
+  }
+}
