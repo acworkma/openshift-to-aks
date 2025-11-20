@@ -10,7 +10,7 @@ param nodeCount int = 3
 @description('The size of the Virtual Machine')
 param nodeVMSize string = 'Standard_D2s_v3'
 @description('The version of Kubernetes')
-param kubernetesVersion string = '1.27.7'
+param kubernetesVersion string = '1.33'
 @description('Enable cluster autoscaler')
 param enableAutoScaling bool = true
 @description('Minimum number of nodes for auto-scaling')
@@ -18,7 +18,7 @@ param minNodeCount int = 1
 @description('Maximum number of nodes for auto-scaling')
 param maxNodeCount int = 5
 @description('Network plugin used for building Kubernetes network')
-@allowed([ 'azure' 'kubenet' ])
+@allowed(['azure', 'kubenet'])
 param networkPlugin string = 'azure'
 @description('Enable RBAC on the AKS cluster')
 param enableRBAC bool = true
@@ -26,7 +26,7 @@ param enableRBAC bool = true
 @description('The name of the Azure Container Registry')
 param acrName string = 'acrlab3${uniqueString(resourceGroup().id)}'
 @description('The SKU of the Azure Container Registry')
-@allowed([ 'Basic' 'Standard' 'Premium' ])
+@allowed(['Basic', 'Standard', 'Premium'])
 param acrSku string = 'Standard'
 
 resource acr 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' = {
@@ -68,7 +68,6 @@ resource aks 'Microsoft.ContainerService/managedClusters@2023-05-01' = {
       loadBalancerSku: 'standard'
       serviceCidr: '10.0.0.0/16'
       dnsServiceIP: '10.0.0.10'
-      dockerBridgeCidr: '172.17.0.1/16'
     }
   }
   dependsOn: [ acr ]

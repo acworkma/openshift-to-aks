@@ -54,7 +54,7 @@ DEPLOY_OUT=$(az deployment group create \
     networkPlugin=azure \
     enableRBAC=true \
     dnsPrefix="${AKS_CLUSTER_NAME}-dns" \
-    kubernetesVersion="1.27.7" \
+    kubernetesVersion="1.33" \
   --query properties.outputs \
   --output json)
 if [[ -z "$DEPLOY_OUT" ]]; then
