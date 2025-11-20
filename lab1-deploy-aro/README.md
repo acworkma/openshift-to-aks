@@ -89,17 +89,6 @@ oc get nodes
 oc get clusterversion
 ```
 
-## ARM Template Deployment (Alternative)
-
-An ARM template is provided for automated deployment. See `deploy-aro.json` for details.
-
-```bash
-az deployment group create \
-  --resource-group $RESOURCEGROUP \
-  --template-file deploy-aro.json \
-  --parameters @parameters.json
-```
-
 ## Clean Up
 
 When you're done, delete the resource group:
