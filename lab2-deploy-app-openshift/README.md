@@ -1,6 +1,6 @@
 # Lab 2: Build & Deploy Next.js App on OpenShift
 
-This lab replaces the previous Flask-style sample with a containerized Next.js application deployed to Azure Red Hat OpenShift. You will build the image, push it to GitHub Container Registry (GHCR), deploy manifests, validate health, and clean up.
+This lab demonstrates building a containerized Next.js application, pushing it to GitHub Container Registry (GHCR), and deploying it to Azure Red Hat OpenShift using Kubernetes manifests.
 
 ## Prerequisites
 - Completed [Lab 1](../lab1-deploy-aro/README.md) – cluster accessible
@@ -76,6 +76,3 @@ oc get pods -l app=nextjs-sample
 
 ## Next Steps
 Continue to [Lab 3](../lab3-deploy-aks/README.md) for AKS deployment.
-
----
-This lab provides a single, consistent workflow (build → push → deploy → validate → export → cleanup) without S2I alternatives for clarity.
