@@ -3,13 +3,13 @@
   "contentVersion": "1.0.0.0",
   "parameters": {
     "clusterName": {
-      "value": "aks-lab-001"
+      "value": "aks-lab3"
     },
     "location": {
-      "value": "eastus"
+      "value": "australiaeast"
     },
     "dnsPrefix": {
-      "value": "aks-lab-001-dns"
+      "value": "aks-lab3-dns"
     },
     "nodeCount": {
       "value": 3

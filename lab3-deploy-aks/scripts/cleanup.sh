@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Lab 3: Cleanup AKS Cluster
-
+# Lab 3: Cleanup AKS Cluster (Streamlined)
 log() { echo "[INFO] $*"; }
 pass() { echo "[PASS] $*"; }
 err() { echo "[ERROR] $*" >&2; }
@@ -15,10 +14,10 @@ if [[ -f .env ]]; then
   export $(grep -v '^#' .env | xargs -d '\n' 2>/dev/null) || true
 fi
 
-AKS_LOCATION="${AKS_LOCATION:-eastus}"
-AKS_RG="${AKS_RG:-rg-aks-lab-${AKS_LOCATION}}"
-AKS_CLUSTER_NAME="${AKS_CLUSTER_NAME:-aks-cluster}"
-CLEANUP_DELETE_RG="${CLEANUP_DELETE_RG:-false}" # if true delete RG, else just cluster
+AKS_LOCATION="${AKS_LOCATION:-australiaeast}"
+AKS_RG="${AKS_RG:-rg-aks-lab3-aue}"
+AKS_CLUSTER_NAME="${AKS_CLUSTER_NAME:-aks-lab3}"
+CLEANUP_DELETE_RG="${CLEANUP_DELETE_RG:-false}"
 
 log "Starting cleanup for cluster $AKS_CLUSTER_NAME (RG: $AKS_RG)"
 

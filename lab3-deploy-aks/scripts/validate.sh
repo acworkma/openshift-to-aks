@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Lab 3: Validate AKS Cluster
-
+# Lab 3: Validate AKS Cluster (Streamlined)
 log() { echo "[INFO] $*"; }
 pass() { echo "[PASS] $*"; }
 err() { echo "[ERROR] $*" >&2; }
@@ -16,33 +15,9 @@ if [[ -f .env ]]; then
   export $(grep -v '^#' .env | xargs -d '\n' 2>/dev/null) || true
 fi
 
-SIMULATE_LOCAL="${SIMULATE_LOCAL:-false}"
-KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-aks-sim}"
-AKS_LOCATION="${AKS_LOCATION:-eastus}"
-AKS_RG="${AKS_RG:-rg-aks-lab-${AKS_LOCATION}}"
-AKS_CLUSTER_NAME="${AKS_CLUSTER_NAME:-aks-cluster}"
-
-if [[ "$SIMULATE_LOCAL" == "true" ]]; then
-  log "SIMULATE_LOCAL=true: Performing local Kind cluster validation (name: $KIND_CLUSTER_NAME)"
-  context_exists=$(kubectl config get-contexts -o name | grep -E "kind-${KIND_CLUSTER_NAME}" || true)
-  if [[ -z "$context_exists" ]]; then
-    fail "Kind cluster kind-${KIND_CLUSTER_NAME} context not found. Run simulate-kind.sh first."
-  fi
-  kubectl config use-context "kind-${KIND_CLUSTER_NAME}" >/dev/null
-  nodes=$(kubectl get nodes -o name || true)
-  if [[ -z "$nodes" ]]; then
-    fail "No nodes found in simulated cluster"
-  fi
-  echo "$nodes"
-  pass "Nodes present in simulated cluster"
-  log "Running DNS test in simulated cluster"
-  kubectl run dns-test --image=busybox:1.36 --restart=Never --command -- sh -c 'sleep 3; nslookup kubernetes.default.svc.cluster.local || true' >/dev/null 2>&1 || true
-  kubectl wait --for=condition=Ready pod/dns-test --timeout=40s >/dev/null 2>&1 || true
-  kubectl logs dns-test 2>/dev/null || true
-  kubectl delete pod dns-test --ignore-not-found >/dev/null 2>&1 || true
-  pass "Local simulation validation complete"
-  exit 0
-fi
+AKS_LOCATION="${AKS_LOCATION:-australiaeast}"
+AKS_RG="${AKS_RG:-rg-aks-lab3-aue}"
+AKS_CLUSTER_NAME="${AKS_CLUSTER_NAME:-aks-lab3}"
 
 log "Validating AKS cluster: $AKS_CLUSTER_NAME in RG: $AKS_RG"
 
@@ -75,11 +50,5 @@ fi
 echo "$nodes"
 pass "kubectl can list nodes"
 
-log "Creating quick test pod"
-kubectl run dns-test --image=busybox:1.36 --restart=Never -n kube-system --command -- sh -c 'sleep 5; nslookup kubernetes.default.svc.cluster.local || true' >/dev/null 2>&1 || true
-kubectl wait --for=condition=Ready pod/dns-test -n kube-system --timeout=40s >/dev/null 2>&1 || true
-log "Pod logs (dns-test):"
-kubectl logs dns-test -n kube-system 2>/dev/null || true
-kubectl delete pod dns-test -n kube-system --ignore-not-found >/dev/null 2>&1 || true
 
 pass "AKS validation complete"
