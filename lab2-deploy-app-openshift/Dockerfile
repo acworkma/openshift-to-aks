@@ -1,4 +1,5 @@
 FROM node:20-alpine AS build
+LABEL org.opencontainers.image.source=https://github.com/acworkma/openshift-to-aks
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json* ./
@@ -13,6 +14,5 @@ ENV NODE_ENV=production \
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
-COPY --from=build /app/public ./public
 EXPOSE 3000
 CMD ["npm", "start"]
