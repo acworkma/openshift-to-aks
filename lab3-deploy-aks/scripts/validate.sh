@@ -15,9 +15,12 @@ if [[ -f .env ]]; then
   export $(grep -v '^#' .env | xargs -d '\n' 2>/dev/null) || true
 fi
 
+
 AKS_LOCATION="${AKS_LOCATION:-australiaeast}"
 AKS_RG="${AKS_RG:-rg-aks-lab3-aue}"
 AKS_CLUSTER_NAME="${AKS_CLUSTER_NAME:-aks-lab3}"
+ACR_NAME="${ACR_NAME:-acrlab3example}"
+
 
 log "Validating AKS cluster: $AKS_CLUSTER_NAME in RG: $AKS_RG"
 
@@ -51,4 +54,23 @@ echo "$nodes"
 pass "kubectl can list nodes"
 
 
-pass "AKS validation complete"
+
+# Validate ACR
+log "Validating ACR: $ACR_NAME in RG: $AKS_RG"
+if ! az acr show -g "$AKS_RG" -n "$ACR_NAME" >/dev/null 2>&1; then
+  fail "ACR $ACR_NAME not found"
+fi
+pass "ACR exists"
+
+acr_login_server=$(az acr show -g "$AKS_RG" -n "$ACR_NAME" --query loginServer -o tsv)
+acr_admin_user=$(az acr credential show -g "$AKS_RG" -n "$ACR_NAME" --query username -o tsv)
+acr_admin_pass=$(az acr credential show -g "$AKS_RG" -n "$ACR_NAME" --query passwords[0].value -o tsv)
+log "ACR login server: $acr_login_server"
+log "ACR admin username: $acr_admin_user"
+if [[ -n "$acr_admin_pass" ]]; then
+  pass "ACR admin password retrieved"
+else
+  fail "ACR admin password not found"
+fi
+
+pass "AKS and ACR validation complete"

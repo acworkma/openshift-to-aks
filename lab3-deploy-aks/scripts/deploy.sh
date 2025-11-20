@@ -16,12 +16,15 @@ if [[ -f .env ]]; then
   export $(grep -v '^#' .env | xargs -d '\n' 2>/dev/null) || true
 fi
 
+
 # Required variables (lab3 naming)
 AKS_LOCATION="${AKS_LOCATION:-australiaeast}"
-AKS_RG="${AKS_RG:-rg-aks-lab3-aue}"  # rg-<service>-lab3-<shortregion>
-AKS_CLUSTER_NAME="${AKS_CLUSTER_NAME:-aks-lab3}"  # aks-lab3
-AKS_NODE_SIZE="${AKS_NODE_SIZE:-Standard_D2s_v3}"  # fallback logic below if disallowed
+AKS_RG="${AKS_RG:-rg-aks-lab3-aue}"
+AKS_CLUSTER_NAME="${AKS_CLUSTER_NAME:-aks-lab3}"
+AKS_NODE_SIZE="${AKS_NODE_SIZE:-Standard_D2s_v3}"
 AKS_NODE_COUNT="${AKS_NODE_COUNT:-3}"
+ACR_NAME="${ACR_NAME:-acrlab3example}"
+ACR_SKU="${ACR_SKU:-Standard}"
 
 # Create resource group if needed
 if ! az group show -n "$AKS_RG" >/dev/null 2>&1; then
@@ -32,49 +35,51 @@ else
   pass "Resource group $AKS_RG exists"
 fi
 
-# Create AKS cluster if needed
-if ! az aks show -g "$AKS_RG" -n "$AKS_CLUSTER_NAME" >/dev/null 2>&1; then
-  log "Creating AKS cluster $AKS_CLUSTER_NAME in $AKS_LOCATION (size: $AKS_NODE_SIZE)"
-  set +e
-  create_output=$(az aks create \
-    --resource-group "$AKS_RG" \
-    --name "$AKS_CLUSTER_NAME" \
-    --location "$AKS_LOCATION" \
-    --node-count "$AKS_NODE_COUNT" \
-    --node-vm-size "$AKS_NODE_SIZE" \
-    --enable-managed-identity \
-    --generate-ssh-keys \
-    --network-plugin azure \
-    --output none 2>&1)
-  create_rc=$?
-  set -e
-  if [[ $create_rc -ne 0 ]]; then
-    if echo "$create_output" | grep -qi "not allowed"; then
-      err "Primary VM size $AKS_NODE_SIZE disallowed; retrying with Standard_B2s"
-      AKS_NODE_SIZE="Standard_B2s"
-      az aks create \
-        --resource-group "$AKS_RG" \
-        --name "$AKS_CLUSTER_NAME" \
-        --location "$AKS_LOCATION" \
-        --node-count "$AKS_NODE_COUNT" \
-        --node-vm-size "$AKS_NODE_SIZE" \
-        --enable-managed-identity \
-        --generate-ssh-keys \
-        --network-plugin azure \
-        --output none || fail "az aks create failed with fallback size $AKS_NODE_SIZE"
-      pass "AKS cluster created with fallback size $AKS_NODE_SIZE"
-    else
-      echo "$create_output" >&2
-      fail "az aks create failed"
-    fi
-  else
-    pass "AKS cluster created"
-  fi
-else
-  pass "AKS cluster $AKS_CLUSTER_NAME already exists"
-fi
 
-# Get credentials
+# Deploy AKS and ACR using Bicep
+log "Deploying AKS and ACR via Bicep..."
+DEPLOY_OUT=$(az deployment group create \
+  --resource-group "$AKS_RG" \
+  --template-file infrastructure/main.bicep \
+  --parameters \
+    clusterName="$AKS_CLUSTER_NAME" \
+    location="$AKS_LOCATION" \
+    nodeCount="$AKS_NODE_COUNT" \
+    nodeVMSize="$AKS_NODE_SIZE" \
+    acrName="$ACR_NAME" \
+    acrSku="$ACR_SKU" \
+    enableAutoScaling=true \
+    minNodeCount=1 \
+    maxNodeCount=5 \
+    networkPlugin=azure \
+    enableRBAC=true \
+    dnsPrefix="${AKS_CLUSTER_NAME}-dns" \
+    kubernetesVersion="1.27.7" \
+  --query properties.outputs \
+  --output json)
+if [[ -z "$DEPLOY_OUT" ]]; then
+  fail "Bicep deployment failed"
+fi
+pass "Bicep deployment succeeded"
+
+# Parse outputs
+ACR_LOGIN_SERVER=$(echo "$DEPLOY_OUT" | grep -o '"acrLoginServer": *{"value": *"[^"]*"' | sed 's/.*"value": *"\([^"]*\)"/\1/')
+ACR_ADMIN_USERNAME=$(echo "$DEPLOY_OUT" | grep -o '"acrAdminUsername": *{"value": *"[^"]*"' | sed 's/.*"value": *"\([^"]*\)"/\1/')
+ACR_ADMIN_PASSWORD=$(echo "$DEPLOY_OUT" | grep -o '"acrAdminPassword": *{"value": *"[^"]*"' | sed 's/.*"value": *"\([^"]*\)"/\1/')
+
+# Write outputs to .env (append or update)
+ENV_FILE=".env"
+touch "$ENV_FILE"
+sed -i "/^ACR_NAME=/d;/^ACR_LOGIN_SERVER=/d;/^ACR_ADMIN_USERNAME=/d;/^ACR_ADMIN_PASSWORD=/d" "$ENV_FILE"
+{
+  echo "ACR_NAME=$ACR_NAME"
+  echo "ACR_LOGIN_SERVER=$ACR_LOGIN_SERVER"
+  echo "ACR_ADMIN_USERNAME=$ACR_ADMIN_USERNAME"
+  echo "ACR_ADMIN_PASSWORD=$ACR_ADMIN_PASSWORD"
+} >> "$ENV_FILE"
+pass "ACR outputs written to $ENV_FILE"
+
+# Get AKS credentials
 log "Fetching kubeconfig credentials"
 az aks get-credentials -g "$AKS_RG" -n "$AKS_CLUSTER_NAME" --overwrite-existing --admin >/dev/null || fail "Failed to get credentials"
 pass "Credentials merged"

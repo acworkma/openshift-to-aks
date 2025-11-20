@@ -12,9 +12,10 @@ import logging
 import os
 import sys
 import yaml
+import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 
 try:
     from kubernetes import client, config
@@ -43,7 +44,101 @@ class OpenShiftToAKSMigrator:
         self.source_context = source_context
         self.target_context = target_context
         self.logger = logging.getLogger(__name__)
-        
+
+    def extract_images_from_manifests(self, manifest_dir: Path) -> Set[str]:
+        """
+        Extract all unique container images from workload manifests in a directory.
+        """
+        image_set = set()
+        workload_files = [
+            'deployments.yaml', 'statefulsets.yaml', 'jobs.yaml', 'cronjobs.yaml', 'deploymentconfigs.yaml'
+        ]
+        for fname in workload_files:
+            fpath = manifest_dir / fname
+            if not fpath.exists():
+                continue
+            with open(fpath, 'r') as f:
+                docs = list(yaml.safe_load_all(f))
+            for doc in docs:
+                if not doc:
+                    continue
+                kind = doc.get('kind')
+                containers = []
+                if kind in ['Deployment', 'StatefulSet', 'DeploymentConfig']:
+                    containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                elif kind == 'Job':
+                    containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                elif kind == 'CronJob':
+                    containers = doc.get('spec', {}).get('jobTemplate', {}).get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                for c in containers:
+                    image = c.get('image')
+                    if image:
+                        image_set.add(image)
+        return image_set
+
+    def import_images_to_acr(self, images: Set[str], acr_login_server: str, acr_name: str, username: str, password: str):
+        """
+        Import images into ACR using az acr import.
+        """
+        for image in images:
+            # Only import if not already in ACR
+            if image.startswith(acr_login_server):
+                self.logger.info(f"Image already in ACR: {image}")
+                continue
+            # Tag for ACR
+            image_name = image.split('/')[-1]
+            acr_image = f"{acr_login_server}/{image_name}"
+            self.logger.info(f"Importing {image} to {acr_image}")
+            cmd = [
+                'az', 'acr', 'import',
+                '--name', acr_name,
+                '--source', image,
+                '--image', image_name,
+                '--username', username,
+                '--password', password,
+                '--force'
+            ]
+            try:
+                subprocess.run(cmd, check=True, capture_output=True)
+                self.logger.info(f"Imported {image} to {acr_image}")
+            except subprocess.CalledProcessError as e:
+                self.logger.error(f"Failed to import {image}: {e.stderr.decode() if e.stderr else e}")
+
+    def rewrite_images_for_acr(self, manifest_dir: Path, acr_login_server: str):
+        """
+        Rewrite all image references in workload manifests to use the ACR login server.
+        """
+        workload_files = [
+            'deployments.yaml', 'statefulsets.yaml', 'jobs.yaml', 'cronjobs.yaml', 'deploymentconfigs.yaml'
+        ]
+        for fname in workload_files:
+            fpath = manifest_dir / fname
+            if not fpath.exists():
+                continue
+            with open(fpath, 'r') as f:
+                docs = list(yaml.safe_load_all(f))
+            changed = False
+            for doc in docs:
+                if not doc:
+                    continue
+                kind = doc.get('kind')
+                containers = []
+                if kind in ['Deployment', 'StatefulSet', 'DeploymentConfig']:
+                    containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                elif kind == 'Job':
+                    containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                elif kind == 'CronJob':
+                    containers = doc.get('spec', {}).get('jobTemplate', {}).get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                for c in containers:
+                    image = c.get('image')
+                    if image and not image.startswith(acr_login_server):
+                        image_name = image.split('/')[-1]
+                        c['image'] = f"{acr_login_server}/{image_name}"
+                        changed = True
+            if changed:
+                with open(fpath, 'w') as f:
+                    yaml.dump_all(docs, f, default_flow_style=False)
+
     def document_application(self, namespace: str, output_dir: str) -> Dict[str, Any]:
         """
         Document all resources for an application in OpenShift
@@ -84,7 +179,6 @@ class OpenShiftToAKSMigrator:
             for deployment in deployments.items:
                 deployment_dict = client.ApiClient().sanitize_for_serialization(deployment)
                 deployment_list.append(deployment_dict)
-            
             if deployment_list:
                 with open(output_path / 'deployments.yaml', 'w') as f:
                     yaml.dump_all(deployment_list, f, default_flow_style=False)
@@ -92,18 +186,110 @@ class OpenShiftToAKSMigrator:
                 self.logger.info(f"Exported {len(deployment_list)} deployment(s)")
         except ApiException as e:
             self.logger.warning(f"Could not export deployments: {e}")
-        
-        # Export Services
+
+        # Export StatefulSets
+        try:
+            statefulsets = apps_v1.list_namespaced_stateful_set(namespace)
+            ss_list = []
+            for ss in statefulsets.items:
+                ss_dict = client.ApiClient().sanitize_for_serialization(ss)
+                ss_list.append(ss_dict)
+            if ss_list:
+                with open(output_path / 'statefulsets.yaml', 'w') as f:
+                    yaml.dump_all(ss_list, f, default_flow_style=False)
+                export_data['resources']['statefulsets'] = len(ss_list)
+                self.logger.info(f"Exported {len(ss_list)} statefulset(s)")
+        except ApiException as e:
+            self.logger.warning(f"Could not export statefulsets: {e}")
+
+        # Export Jobs and CronJobs
+        batch_v1 = client.BatchV1Api()
+        batch_v1beta1 = getattr(client, 'BatchV1beta1Api', None)
+        try:
+            jobs = batch_v1.list_namespaced_job(namespace)
+            job_list = []
+            for job in jobs.items:
+                job_dict = client.ApiClient().sanitize_for_serialization(job)
+                job_list.append(job_dict)
+            if job_list:
+                with open(output_path / 'jobs.yaml', 'w') as f:
+                    yaml.dump_all(job_list, f, default_flow_style=False)
+                export_data['resources']['jobs'] = len(job_list)
+                self.logger.info(f"Exported {len(job_list)} job(s)")
+        except ApiException as e:
+            self.logger.warning(f"Could not export jobs: {e}")
+
+        # Export CronJobs (try both v1 and v1beta1 for compatibility)
+        try:
+            cronjobs = batch_v1.list_namespaced_cron_job(namespace)
+            cronjob_list = []
+            for cj in cronjobs.items:
+                cj_dict = client.ApiClient().sanitize_for_serialization(cj)
+                cronjob_list.append(cj_dict)
+            if cronjob_list:
+                with open(output_path / 'cronjobs.yaml', 'w') as f:
+                    yaml.dump_all(cronjob_list, f, default_flow_style=False)
+                export_data['resources']['cronjobs'] = len(cronjob_list)
+                self.logger.info(f"Exported {len(cronjob_list)} cronjob(s)")
+        except Exception as e:
+            self.logger.warning(f"Could not export cronjobs: {e}")
+
+        # Export PVCs
+        try:
+            pvcs = core_v1.list_namespaced_persistent_volume_claim(namespace)
+            pvc_list = []
+            for pvc in pvcs.items:
+                pvc_dict = client.ApiClient().sanitize_for_serialization(pvc)
+                pvc_list.append(pvc_dict)
+            if pvc_list:
+                with open(output_path / 'pvcs.yaml', 'w') as f:
+                    yaml.dump_all(pvc_list, f, default_flow_style=False)
+                export_data['resources']['pvcs'] = len(pvc_list)
+                self.logger.info(f"Exported {len(pvc_list)} pvc(s)")
+        except ApiException as e:
+            self.logger.warning(f"Could not export pvcs: {e}")
+
+        # Export ServiceAccounts
+        try:
+            sas = core_v1.list_namespaced_service_account(namespace)
+            sa_list = []
+            for sa in sas.items:
+                sa_dict = client.ApiClient().sanitize_for_serialization(sa)
+                sa_list.append(sa_dict)
+            if sa_list:
+                with open(output_path / 'serviceaccounts.yaml', 'w') as f:
+                    yaml.dump_all(sa_list, f, default_flow_style=False)
+                export_data['resources']['serviceaccounts'] = len(sa_list)
+                self.logger.info(f"Exported {len(sa_list)} serviceaccount(s)")
+        except ApiException as e:
+            self.logger.warning(f"Could not export serviceaccounts: {e}")
+
+        # Export DeploymentConfigs (OpenShift-specific)
+        try:
+            custom_api = client.CustomObjectsApi()
+            dcs = custom_api.list_namespaced_custom_object(
+                group="apps.openshift.io",
+                version="v1",
+                namespace=namespace,
+                plural="deploymentconfigs"
+            )
+            if dcs.get('items'):
+                with open(output_path / 'deploymentconfigs.yaml', 'w') as f:
+                    yaml.dump_all(dcs['items'], f, default_flow_style=False)
+                export_data['resources']['deploymentconfigs'] = len(dcs['items'])
+                self.logger.warning(f"Found {len(dcs['items'])} DeploymentConfig(s). These should be converted to standard Deployments for AKS.")
+        except Exception as e:
+            self.logger.info(f"No deploymentconfigs found or not an OpenShift cluster: {e}")
+
+        # Export Services (original logic)
         try:
             services = core_v1.list_namespaced_service(namespace)
             service_list = []
             for service in services.items:
-                # Skip default kubernetes service
                 if service.metadata.name == 'kubernetes':
                     continue
                 service_dict = client.ApiClient().sanitize_for_serialization(service)
                 service_list.append(service_dict)
-            
             if service_list:
                 with open(output_path / 'services.yaml', 'w') as f:
                     yaml.dump_all(service_list, f, default_flow_style=False)
@@ -111,18 +297,16 @@ class OpenShiftToAKSMigrator:
                 self.logger.info(f"Exported {len(service_list)} service(s)")
         except ApiException as e:
             self.logger.warning(f"Could not export services: {e}")
-        
-        # Export ConfigMaps
+
+        # Export ConfigMaps (original logic)
         try:
             configmaps = core_v1.list_namespaced_config_map(namespace)
             configmap_list = []
             for cm in configmaps.items:
-                # Skip system ConfigMaps
                 if cm.metadata.name.startswith('kube-') or cm.metadata.name.startswith('openshift-'):
                     continue
                 cm_dict = client.ApiClient().sanitize_for_serialization(cm)
                 configmap_list.append(cm_dict)
-            
             if configmap_list:
                 with open(output_path / 'configmaps.yaml', 'w') as f:
                     yaml.dump_all(configmap_list, f, default_flow_style=False)
@@ -130,20 +314,18 @@ class OpenShiftToAKSMigrator:
                 self.logger.info(f"Exported {len(configmap_list)} configmap(s)")
         except ApiException as e:
             self.logger.warning(f"Could not export configmaps: {e}")
-        
-        # Export Secrets
+
+        # Export Secrets (original logic)
         try:
             secrets = core_v1.list_namespaced_secret(namespace)
             secret_list = []
             for secret in secrets.items:
-                # Skip service account tokens and system secrets
                 if (secret.type == 'kubernetes.io/service-account-token' or 
                     secret.metadata.name.startswith('default-token-') or
                     secret.metadata.name.startswith('builder-token-')):
                     continue
                 secret_dict = client.ApiClient().sanitize_for_serialization(secret)
                 secret_list.append(secret_dict)
-            
             if secret_list:
                 with open(output_path / 'secrets.yaml', 'w') as f:
                     yaml.dump_all(secret_list, f, default_flow_style=False)
@@ -151,8 +333,8 @@ class OpenShiftToAKSMigrator:
                 self.logger.info(f"Exported {len(secret_list)} secret(s)")
         except ApiException as e:
             self.logger.warning(f"Could not export secrets: {e}")
-        
-        # Try to export Routes (OpenShift-specific)
+
+        # Try to export Routes (OpenShift-specific, original logic)
         try:
             custom_api = client.CustomObjectsApi()
             routes = custom_api.list_namespaced_custom_object(
@@ -161,7 +343,6 @@ class OpenShiftToAKSMigrator:
                 namespace=namespace,
                 plural="routes"
             )
-            
             if routes.get('items'):
                 with open(output_path / 'routes.yaml', 'w') as f:
                     yaml.dump_all(routes['items'], f, default_flow_style=False)
@@ -169,11 +350,66 @@ class OpenShiftToAKSMigrator:
                 self.logger.info(f"Exported {len(routes['items'])} route(s)")
         except Exception as e:
             self.logger.info(f"No routes found or not an OpenShift cluster: {e}")
-        
+
+        # Warn on BuildConfigs, ImageStreams, Templates, SCCs, CRDs
+        try:
+            custom_api = client.CustomObjectsApi()
+            # BuildConfigs
+            bcs = custom_api.list_namespaced_custom_object(
+                group="build.openshift.io",
+                version="v1",
+                namespace=namespace,
+                plural="buildconfigs"
+            )
+            if bcs.get('items'):
+                self.logger.warning(f"Found {len(bcs['items'])} BuildConfig(s). These are OpenShift-specific and should be replaced with external CI/CD.")
+            # ImageStreams
+            iss = custom_api.list_namespaced_custom_object(
+                group="image.openshift.io",
+                version="v1",
+                namespace=namespace,
+                plural="imagestreams"
+            )
+            if iss.get('items'):
+                self.logger.warning(f"Found {len(iss['items'])} ImageStream(s). These are OpenShift-specific and should be replaced with direct image references.")
+            # Templates
+            templates = custom_api.list_namespaced_custom_object(
+                group="template.openshift.io",
+                version="v1",
+                namespace=namespace,
+                plural="templates"
+            )
+            if templates.get('items'):
+                self.logger.warning(f"Found {len(templates['items'])} Template(s). These are OpenShift-specific and should be converted to Helm/Kustomize.")
+            # SCCs (cluster-scoped, not namespaced)
+            try:
+                sccs = custom_api.list_cluster_custom_object(
+                    group="security.openshift.io",
+                    version="v1",
+                    plural="securitycontextconstraints"
+                )
+                if sccs.get('items'):
+                    self.logger.warning(f"Cluster has {len(sccs['items'])} SCC(s). These are OpenShift-specific and should be reviewed for AKS RBAC/PodSecurity.")
+            except Exception:
+                pass
+            # CRDs
+            try:
+                crds = custom_api.list_cluster_custom_object(
+                    group="apiextensions.k8s.io",
+                    version="v1",
+                    plural="customresourcedefinitions"
+                )
+                if crds.get('items'):
+                    self.logger.warning(f"Cluster has {len(crds['items'])} CRD(s). Custom resources may require manual migration.")
+            except Exception:
+                pass
+        except Exception as e:
+            self.logger.info(f"Could not check for OpenShift-specific resources: {e}")
+
         # Save export metadata
         with open(output_path / 'migration-report.json', 'w') as f:
             json.dump(export_data, f, indent=2)
-        
+
         self.logger.info(f"Export complete. Files saved to: {output_dir}")
         return export_data
     
@@ -181,29 +417,22 @@ class OpenShiftToAKSMigrator:
                            target_namespace: Optional[str] = None) -> Dict[str, Any]:
         """
         Transform OpenShift resource to AKS-compatible format
-        
         Args:
             resource: Resource dictionary
-            
         Returns:
             Transformed resource dictionary
         """
         # Remove OpenShift-specific metadata
         if 'metadata' in resource:
             metadata = resource['metadata']
-            # Remove fields that shouldn't be migrated
             for field in ['uid', 'selfLink', 'resourceVersion', 'generation', 'creationTimestamp']:
                 metadata.pop(field, None)
-            
-            # Clean annotations
             if 'annotations' in metadata:
                 annotations = metadata['annotations']
-                # Remove OpenShift-specific annotations (annotation keys, not URLs)
-                # This filters out annotations with keys starting with 'openshift.io/'
                 openshift_annotations = [key for key in annotations if key.startswith('openshift.io/')]
                 for key in openshift_annotations:
                     del annotations[key]
-        
+
         # Namespace remap
         if target_namespace and 'metadata' in resource and 'namespace' in resource['metadata']:
             resource['metadata']['namespace'] = target_namespace
@@ -211,36 +440,76 @@ class OpenShiftToAKSMigrator:
         # Remove status field
         resource.pop('status', None)
 
-        # Image registry rewrite for deployments/statefulsets
+        kind = resource.get('kind')
+
+        # Image registry rewrite for workloads
         try:
-            if registry_rewrite and resource.get('kind') in ['Deployment', 'StatefulSet']:
-                containers = resource.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+            if registry_rewrite and kind in ['Deployment', 'StatefulSet', 'Job', 'CronJob', 'DeploymentConfig']:
+                # DeploymentConfig: OpenShift, treat like Deployment
+                containers = []
+                if kind in ['Deployment', 'StatefulSet']:
+                    containers = resource.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                elif kind == 'Job':
+                    containers = resource.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                elif kind == 'CronJob':
+                    containers = resource.get('spec', {}).get('jobTemplate', {}).get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                elif kind == 'DeploymentConfig':
+                    containers = resource.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 for c in containers:
                     image = c.get('image')
                     if image and '/' in image:
-                        # Replace first segment (registry) with provided one
                         parts = image.split('/')
                         parts[0] = registry_rewrite.rstrip('/')
                         c['image'] = '/'.join(parts)
         except Exception:
             pass
 
-        # Strip clusterIP from services (must not be set when applying new)
-        if resource.get('kind') == 'Service':
+        # Service: strip clusterIP/clusterIPs
+        if kind == 'Service':
             spec = resource.get('spec', {})
             spec.pop('clusterIP', None)
             spec.pop('clusterIPs', None)
-            # Map OpenShift Service types if needed (NodePort -> LoadBalancer optional)
-            if spec.get('type') == 'ClusterIP':
-                # leave as-is
-                pass
-            elif spec.get('type') == 'LoadBalancer':
-                # keep; ensure no status remnants
-                pass
-            elif spec.get('type') == 'NodePort':
-                # Optionally keep NodePort; nothing to change now.
-                pass
-        
+
+        # PVC: map storageClassName if needed (user must review)
+        if kind == 'PersistentVolumeClaim':
+            spec = resource.get('spec', {})
+            # Optionally map storageClassName here
+            # For now, just warn in docs
+
+        # Secret: attempt to transform image pull secrets for ACR
+        if kind == 'Secret' and resource.get('type') == 'kubernetes.io/dockerconfigjson':
+            # If registry_rewrite is set, rewrite .dockerconfigjson
+            import base64, json as js
+            data = resource.get('data', {})
+            if '.dockerconfigjson' in data and registry_rewrite:
+                try:
+                    decoded = base64.b64decode(data['.dockerconfigjson']).decode('utf-8')
+                    config_json = js.loads(decoded)
+                    # Overwrite all registry keys with the new registry
+                    auths = config_json.get('auths', {})
+                    new_auths = {}
+                    for reg in auths:
+                        new_auths[registry_rewrite] = auths[reg]
+                        break  # Only keep one
+                    config_json['auths'] = new_auths
+                    encoded = base64.b64encode(js.dumps(config_json).encode('utf-8')).decode('utf-8')
+                    data['.dockerconfigjson'] = encoded
+                except Exception:
+                    pass
+
+        # DeploymentConfig: convert to Deployment (basic)
+        if kind == 'DeploymentConfig':
+            # Minimal conversion: treat as Deployment, drop OpenShift triggers, etc.
+            resource['kind'] = 'Deployment'
+            resource['apiVersion'] = 'apps/v1'
+            # Remove OpenShift-specific fields
+            for field in ['triggers', 'strategy', 'test', 'paused']:
+                resource.get('spec', {}).pop(field, None)
+
+        # CronJob: ensure apiVersion is correct for AKS
+        if kind == 'CronJob':
+            resource['apiVersion'] = 'batch/v1'
+
         return resource
     
     def route_to_ingress(self, route: Dict[str, Any]) -> Dict[str, Any]:
@@ -313,7 +582,8 @@ class OpenShiftToAKSMigrator:
     
     def migrate_application(self, namespace: str, output_dir: str, apply: bool = False,
                              registry_rewrite: Optional[str] = None,
-                             target_namespace: Optional[str] = None) -> bool:
+                             target_namespace: Optional[str] = None,
+                             acr_env_path: Optional[str] = None) -> bool:
         """
         Migrate application from OpenShift to AKS
         
@@ -321,10 +591,40 @@ class OpenShiftToAKSMigrator:
             namespace: Source namespace
             output_dir: Directory to save transformed resources
             apply: Whether to apply resources to target cluster
+            registry_rewrite: ACR login server (e.g. myacr.azurecr.io) to rewrite images
+            target_namespace: Target namespace (defaults to source)
+            acr_env_path: Path to .env file containing ACR credentials for image import
             
         Returns:
             True if successful, False otherwise
         """
+        # Load ACR credentials from .env if provided
+        acr_name = None
+        acr_login_server = None
+        acr_username = None
+        acr_password = None
+        if acr_env_path and Path(acr_env_path).exists():
+            self.logger.info(f"Loading ACR credentials from {acr_env_path}")
+            with open(acr_env_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '=' in line:
+                        key, val = line.split('=', 1)
+                        if key == 'ACR_NAME':
+                            acr_name = val
+                        elif key == 'ACR_LOGIN_SERVER':
+                            acr_login_server = val
+                        elif key == 'ACR_ADMIN_USERNAME':
+                            acr_username = val
+                        elif key == 'ACR_ADMIN_PASSWORD':
+                            acr_password = val
+            # If registry_rewrite not set and ACR login server is available, use it
+            if not registry_rewrite and acr_login_server:
+                registry_rewrite = acr_login_server
+                self.logger.info(f"Using ACR_LOGIN_SERVER from .env: {registry_rewrite}")
+
         # First, document the application
         export_data = self.document_application(namespace, f"{output_dir}/source")
         
@@ -334,65 +634,117 @@ class OpenShiftToAKSMigrator:
         
         source_dir = Path(output_dir) / 'source'
         
-        # Transform deployments
+        # ACR image import logic
+        if acr_name and acr_login_server and acr_username and acr_password:
+            self.logger.info("ACR credentials found. Extracting images from manifests for import.")
+            images = self.extract_images_from_manifests(source_dir)
+            if images:
+                self.logger.info(f"Found {len(images)} unique image(s) in manifests: {images}")
+                self.logger.info("Importing images to ACR...")
+                self.import_images_to_acr(images, acr_login_server, acr_name, acr_username, acr_password)
+                self.logger.info("Image import complete.")
+            else:
+                self.logger.info("No images found in manifests.")
+        else:
+            if acr_env_path:
+                self.logger.warning("ACR credentials incomplete in .env. Skipping image import.")
+
+        # Transform Deployments
         if (source_dir / 'deployments.yaml').exists():
             with open(source_dir / 'deployments.yaml', 'r') as f:
                 deployments = list(yaml.safe_load_all(f))
-            
-            transformed_deployments = [self.transform_resource(d, registry_rewrite, target_namespace) for d in deployments if d]
-            
+            transformed = [self.transform_resource(d, registry_rewrite, target_namespace) for d in deployments if d]
             with open(aks_output / 'deployments.yaml', 'w') as f:
-                yaml.dump_all(transformed_deployments, f, default_flow_style=False)
-        
-        # Transform services
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
+        # Transform StatefulSets
+        if (source_dir / 'statefulsets.yaml').exists():
+            with open(source_dir / 'statefulsets.yaml', 'r') as f:
+                statefulsets = list(yaml.safe_load_all(f))
+            transformed = [self.transform_resource(s, registry_rewrite, target_namespace) for s in statefulsets if s]
+            with open(aks_output / 'statefulsets.yaml', 'w') as f:
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
+        # Transform Jobs
+        if (source_dir / 'jobs.yaml').exists():
+            with open(source_dir / 'jobs.yaml', 'r') as f:
+                jobs = list(yaml.safe_load_all(f))
+            transformed = [self.transform_resource(j, registry_rewrite, target_namespace) for j in jobs if j]
+            with open(aks_output / 'jobs.yaml', 'w') as f:
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
+        # Transform CronJobs
+        if (source_dir / 'cronjobs.yaml').exists():
+            with open(source_dir / 'cronjobs.yaml', 'r') as f:
+                cronjobs = list(yaml.safe_load_all(f))
+            transformed = [self.transform_resource(cj, registry_rewrite, target_namespace) for cj in cronjobs if cj]
+            with open(aks_output / 'cronjobs.yaml', 'w') as f:
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
+        # Transform PVCs
+        if (source_dir / 'pvcs.yaml').exists():
+            with open(source_dir / 'pvcs.yaml', 'r') as f:
+                pvcs = list(yaml.safe_load_all(f))
+            transformed = [self.transform_resource(pvc, registry_rewrite, target_namespace) for pvc in pvcs if pvc]
+            with open(aks_output / 'pvcs.yaml', 'w') as f:
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
+        # Transform ServiceAccounts
+        if (source_dir / 'serviceaccounts.yaml').exists():
+            with open(source_dir / 'serviceaccounts.yaml', 'r') as f:
+                sas = list(yaml.safe_load_all(f))
+            transformed = [self.transform_resource(sa, registry_rewrite, target_namespace) for sa in sas if sa]
+            with open(aks_output / 'serviceaccounts.yaml', 'w') as f:
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
+        # Transform DeploymentConfigs (convert to Deployments)
+        if (source_dir / 'deploymentconfigs.yaml').exists():
+            with open(source_dir / 'deploymentconfigs.yaml', 'r') as f:
+                dcs = list(yaml.safe_load_all(f))
+            transformed = [self.transform_resource(dc, registry_rewrite, target_namespace) for dc in dcs if dc]
+            with open(aks_output / 'deployments-from-dc.yaml', 'w') as f:
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
+        # Transform Services
         if (source_dir / 'services.yaml').exists():
             with open(source_dir / 'services.yaml', 'r') as f:
                 services = list(yaml.safe_load_all(f))
-            
-            transformed_services = [self.transform_resource(s, registry_rewrite, target_namespace) for s in services if s]
-            
+            transformed = [self.transform_resource(s, registry_rewrite, target_namespace) for s in services if s]
             with open(aks_output / 'services.yaml', 'w') as f:
-                yaml.dump_all(transformed_services, f, default_flow_style=False)
-        
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
         # Transform ConfigMaps
         if (source_dir / 'configmaps.yaml').exists():
             with open(source_dir / 'configmaps.yaml', 'r') as f:
                 configmaps = list(yaml.safe_load_all(f))
-            
-            transformed_configmaps = [self.transform_resource(cm, registry_rewrite, target_namespace) for cm in configmaps if cm]
-            
+            transformed = [self.transform_resource(cm, registry_rewrite, target_namespace) for cm in configmaps if cm]
             with open(aks_output / 'configmaps.yaml', 'w') as f:
-                yaml.dump_all(transformed_configmaps, f, default_flow_style=False)
-        
+                yaml.dump_all(transformed, f, default_flow_style=False)
+
         # Transform Routes to Ingress
         if (source_dir / 'routes.yaml').exists():
             with open(source_dir / 'routes.yaml', 'r') as f:
                 routes = list(yaml.safe_load_all(f))
-            
             ingresses = [self.route_to_ingress(route) for route in routes if route]
-            
             if ingresses:
                 with open(aks_output / 'ingresses.yaml', 'w') as f:
                     yaml.dump_all(ingresses, f, default_flow_style=False)
-        
-        # Copy secrets (with warning about reviewing them)
+
+        # Transform Secrets (with ACR logic)
         if (source_dir / 'secrets.yaml').exists():
             with open(source_dir / 'secrets.yaml', 'r') as f:
                 secrets = list(yaml.safe_load_all(f))
-            
-            transformed_secrets = [self.transform_resource(s, registry_rewrite, target_namespace) for s in secrets if s]
-            
+            transformed = [self.transform_resource(s, registry_rewrite, target_namespace) for s in secrets if s]
             with open(aks_output / 'secrets.yaml', 'w') as f:
-                yaml.dump_all(transformed_secrets, f, default_flow_style=False)
-            
+                yaml.dump_all(transformed, f, default_flow_style=False)
             self.logger.warning("Secrets have been exported. Please review them before applying to AKS.")
-        
+
         self.logger.info(f"Transformation complete. AKS manifests saved to: {aks_output}")
-        
+
         # Apply to AKS if requested
         if apply:
             return self.apply_to_aks(namespace, aks_output)
-        
+
         return True
     
     def apply_to_aks(self, namespace: str, manifest_dir: Path) -> bool:
@@ -515,64 +867,98 @@ class OpenShiftToAKSMigrator:
         return True
 
 
+
 def main():
     """Main entry point for the migration script"""
     parser = argparse.ArgumentParser(
         description='Migrate applications from OpenShift to Azure Kubernetes Service (AKS)',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    
+
     subparsers = parser.add_subparsers(dest='command', help='Command to execute')
-    
+
     # Document command
     doc_parser = subparsers.add_parser('document', help='Document OpenShift application')
-    doc_parser.add_argument('--namespace', required=True, help='OpenShift namespace/project')
-    doc_parser.add_argument('--output', required=True, help='Output directory for exported resources')
+    doc_parser.add_argument('--namespace', help='OpenShift namespace/project')
+    doc_parser.add_argument('--output', help='Output directory for exported resources')
     doc_parser.add_argument('--context', help='Kubernetes context for OpenShift cluster')
-    
+
     # Migrate command
     migrate_parser = subparsers.add_parser('migrate', help='Migrate application from OpenShift to AKS')
-    migrate_parser.add_argument('--namespace', required=True, help='Source namespace')
+    migrate_parser.add_argument('--namespace', help='Source namespace')
     migrate_parser.add_argument('--source-context', help='Kubernetes context for OpenShift cluster')
     migrate_parser.add_argument('--target-context', help='Kubernetes context for AKS cluster')
-    migrate_parser.add_argument('--output', required=True, help='Output directory for migrated resources')
+    migrate_parser.add_argument('--output', help='Output directory for migrated resources')
     migrate_parser.add_argument('--apply', action='store_true', help='Apply resources to AKS')
     migrate_parser.add_argument('--registry-rewrite', help='Rewrite container image registry (e.g. myregistry.azurecr.io)')
     migrate_parser.add_argument('--target-namespace', help='Namespace to use on AKS (defaults to source)')
-    
+    migrate_parser.add_argument('--acr-env-path', help='Path to .env file with ACR credentials (for image import)')
+
     # Global options
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging')
-    
+
     args = parser.parse_args()
-    
+
+    # Interactive prompt for missing required arguments
+    # TODO: For each required argument, if not provided, prompt the user interactively
+    # Example: if not args.namespace: args.namespace = input('Enter namespace: ')
+    # For now, just print a warning if missing
+    if args.command == 'document':
+        if not args.namespace:
+            args.namespace = input('Enter OpenShift namespace/project: ')
+        if not args.output:
+            args.output = input('Enter output directory for exported resources: ')
+    elif args.command == 'migrate':
+        if not args.namespace:
+            args.namespace = input('Enter source namespace: ')
+        if not args.output:
+            args.output = input('Enter output directory for migrated resources: ')
+        if not args.source_context:
+            args.source_context = input('Enter Kubernetes context for OpenShift cluster (blank for default): ')
+        if not args.target_context:
+            args.target_context = input('Enter Kubernetes context for AKS cluster (blank for default): ')
+        if not args.target_namespace:
+            confirm = input(f'Use source namespace "{args.namespace}" as target namespace on AKS? [Y/n]: ')
+            if confirm.lower() in ('n', 'no'):
+                args.target_namespace = input('Enter target namespace for AKS: ')
+            else:
+                args.target_namespace = args.namespace
+
     # Check if kubernetes is available when executing commands
     if args.command and not KUBERNETES_AVAILABLE:
         print("Error: kubernetes package not found. Please run: pip install -r requirements.txt", file=sys.stderr)
         sys.exit(1)
-    
+
     # Configure logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     logging.basicConfig(
         level=log_level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
+
     # Execute command
     if args.command == 'document':
         migrator = OpenShiftToAKSMigrator(source_context=args.context)
         migrator.document_application(args.namespace, args.output)
-    
+
     elif args.command == 'migrate':
         migrator = OpenShiftToAKSMigrator(
             source_context=args.source_context,
             target_context=args.target_context
         )
+        # Confirm before applying if --apply is set
+        if args.apply:
+            confirm = input('Are you sure you want to apply these resources to AKS? [y/N]: ')
+            if confirm.lower() not in ('y', 'yes'):
+                print('Aborting apply.')
+                sys.exit(0)
         success = migrator.migrate_application(args.namespace, args.output, args.apply,
                                registry_rewrite=args.registry_rewrite,
-                               target_namespace=args.target_namespace or args.namespace)
+                               target_namespace=args.target_namespace or args.namespace,
+                               acr_env_path=args.acr_env_path)
         if not success:
             sys.exit(1)
-    
+
     else:
         parser.print_help()
         sys.exit(1)

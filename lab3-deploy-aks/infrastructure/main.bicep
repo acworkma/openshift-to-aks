@@ -1,137 +1,82 @@
-// TEMPORARY: ARM template content copied from deploy-aks.json. To be converted to Bicep.
-// See parameters.example.json for sample parameters.
-{
-  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-  "contentVersion": "1.0.0.0",
-  "parameters": {
-    "clusterName": {
-      "type": "string",
-      "defaultValue": "aks-cluster",
-      "metadata": {
-        "description": "The name of the AKS cluster"
-      }
-    },
-    "location": {
-      "type": "string",
-      "defaultValue": "[resourceGroup().location]",
-      "metadata": {
-        "description": "The location of the AKS cluster"
-      }
-    },
-    "dnsPrefix": {
-      "type": "string",
-      "defaultValue": "[concat(parameters('clusterName'), '-dns')]",
-      "metadata": {
-        "description": "Optional DNS prefix to use with hosted Kubernetes API server FQDN"
-      }
-    },
-    "nodeCount": {
-      "type": "int",
-      "defaultValue": 3,
-      "minValue": 1,
-      "maxValue": 50,
-      "metadata": {
-        "description": "The number of nodes for the cluster"
-      }
-    },
-    "nodeVMSize": {
-      "type": "string",
-      "defaultValue": "Standard_D2s_v3",
-      "metadata": {
-        "description": "The size of the Virtual Machine"
-      }
-    },
-    "kubernetesVersion": {
-      "type": "string",
-      "defaultValue": "1.27.7",
-      "metadata": {
-        "description": "The version of Kubernetes"
-      }
-    },
-    "enableAutoScaling": {
-      "type": "bool",
-      "defaultValue": true,
-      "metadata": {
-        "description": "Enable cluster autoscaler"
-      }
-    },
-    "minNodeCount": {
-      "type": "int",
-      "defaultValue": 1,
-      "metadata": {
-        "description": "Minimum number of nodes for auto-scaling"
-      }
-    },
-    "maxNodeCount": {
-      "type": "int",
-      "defaultValue": 5,
-      "metadata": {
-        "description": "Maximum number of nodes for auto-scaling"
-      }
-    },
-    "networkPlugin": {
-      "type": "string",
-      "defaultValue": "azure",
-      "allowedValues": [
-        "azure",
-        "kubenet"
-      ],
-      "metadata": {
-        "description": "Network plugin used for building Kubernetes network"
-      }
-    },
-    "enableRBAC": {
-      "type": "bool",
-      "defaultValue": true,
-      "metadata": {
-        "description": "Enable RBAC on the AKS cluster"
-      }
-    }
-  },
-  "resources": [
-    {
-      "type": "Microsoft.ContainerService/managedClusters",
-      "apiVersion": "2023-05-01",
-      "name": "[parameters('clusterName')]",
-      "location": "[parameters('location')]",
-      "identity": {
-        "type": "SystemAssigned"
-      },
-      "properties": {
-        "dnsPrefix": "[parameters('dnsPrefix')]",
-        "kubernetesVersion": "[parameters('kubernetesVersion')]",
-        "enableRBAC": "[parameters('enableRBAC')]",
-        "agentPoolProfiles": [
-          {
-            "name": "agentpool",
-            "count": "[parameters('nodeCount')]",
-            "vmSize": "[parameters('nodeVMSize')]",
-            "osType": "Linux",
-            "mode": "System",
-            "enableAutoScaling": "[parameters('enableAutoScaling')]",
-            "minCount": "[if(parameters('enableAutoScaling'), parameters('minNodeCount'), json('null'))]",
-            "maxCount": "[if(parameters('enableAutoScaling'), parameters('maxNodeCount'), json('null'))]",
-            "type": "VirtualMachineScaleSets"
-          }
-        ],
-        "networkProfile": {
-          "networkPlugin": "[parameters('networkPlugin')]",
-          "loadBalancerSku": "standard",
-          "serviceCidr": "10.0.0.0/16",
-          "dnsServiceIP": "10.0.0.10",
-          "dockerBridgeCidr": "172.17.0.1/16"
-        }
-      }
-    }
-  ],
-  "outputs": {
-    "controlPlaneFQDN": {
-      "type": "string",
-      "value": "[reference(resourceId('Microsoft.ContainerService/managedClusters', parameters('clusterName'))).fqdn]"
-    },
-    "clusterName": {
-      "type": "string",
-      "value": "[parameters('clusterName')]"
-    }
+
+@description('The name of the AKS cluster')
+param clusterName string = 'aks-lab3'
+@description('The location for all resources')
+param location string = resourceGroup().location
+@description('Optional DNS prefix for the AKS API server')
+param dnsPrefix string = '${clusterName}-dns'
+@description('The number of nodes for the cluster')
+param nodeCount int = 3
+@description('The size of the Virtual Machine')
+param nodeVMSize string = 'Standard_D2s_v3'
+@description('The version of Kubernetes')
+param kubernetesVersion string = '1.27.7'
+@description('Enable cluster autoscaler')
+param enableAutoScaling bool = true
+@description('Minimum number of nodes for auto-scaling')
+param minNodeCount int = 1
+@description('Maximum number of nodes for auto-scaling')
+param maxNodeCount int = 5
+@description('Network plugin used for building Kubernetes network')
+@allowed([ 'azure' 'kubenet' ])
+param networkPlugin string = 'azure'
+@description('Enable RBAC on the AKS cluster')
+param enableRBAC bool = true
+
+@description('The name of the Azure Container Registry')
+param acrName string = 'acrlab3${uniqueString(resourceGroup().id)}'
+@description('The SKU of the Azure Container Registry')
+@allowed([ 'Basic' 'Standard' 'Premium' ])
+param acrSku string = 'Standard'
+
+resource acr 'Microsoft.ContainerRegistry/registries@2023-01-01-preview' = {
+  name: acrName
+  location: location
+  sku: {
+    name: acrSku
+  }
+  properties: {
+    adminUserEnabled: true
   }
 }
+
+resource aks 'Microsoft.ContainerService/managedClusters@2023-05-01' = {
+  name: clusterName
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    dnsPrefix: dnsPrefix
+    kubernetesVersion: kubernetesVersion
+    enableRBAC: enableRBAC
+    agentPoolProfiles: [
+      {
+        name: 'agentpool'
+        count: nodeCount
+        vmSize: nodeVMSize
+        osType: 'Linux'
+        mode: 'System'
+        enableAutoScaling: enableAutoScaling
+        minCount: enableAutoScaling ? minNodeCount : null
+        maxCount: enableAutoScaling ? maxNodeCount : null
+        type: 'VirtualMachineScaleSets'
+      }
+    ]
+    networkProfile: {
+      networkPlugin: networkPlugin
+      loadBalancerSku: 'standard'
+      serviceCidr: '10.0.0.0/16'
+      dnsServiceIP: '10.0.0.10'
+      dockerBridgeCidr: '172.17.0.1/16'
+    }
+  }
+  dependsOn: [ acr ]
+}
+
+output controlPlaneFQDN string = aks.properties.fqdn
+output clusterName string = clusterName
+output acrLoginServer string = acr.properties.loginServer
+output acrName string = acr.name
+output acrAdminUsername string = acr.listCredentials().username
+output acrAdminPassword string = acr.listCredentials().passwords[0].value
