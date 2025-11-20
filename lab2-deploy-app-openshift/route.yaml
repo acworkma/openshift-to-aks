@@ -1,13 +1,14 @@
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: sample-app
+  name: nextjs-sample
   labels:
-    app: sample-app
+    app: nextjs-sample
 spec:
   to:
     kind: Service
-    name: sample-app
+    name: nextjs-sample
   port:
     targetPort: http
   wildcardPolicy: None
+

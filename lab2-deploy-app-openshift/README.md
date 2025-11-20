@@ -1,166 +1,81 @@
-# Lab 2: Deploy Sample Application to OpenShift
+# Lab 2: Build & Deploy Next.js App on OpenShift
 
-This lab guides you through deploying a sample application to your Azure Red Hat OpenShift cluster.
+This lab replaces the previous Flask-style sample with a containerized Next.js application deployed to Azure Red Hat OpenShift. You will build the image, push it to GitHub Container Registry (GHCR), deploy manifests, validate health, and clean up.
 
 ## Prerequisites
+- Completed [Lab 1](../lab1-deploy-aro/README.md) – cluster accessible
+- `oc` CLI installed & logged in (`oc login ...`)
+- Docker (or compatible) CLI for image build
+- GHCR credentials (`docker login ghcr.io`)
+- `curl` for validation
 
-- Completed [Lab 1](../lab1-deploy-aro/README.md) - ARO cluster deployed and accessible
-- `oc` CLI installed and logged into the cluster
-- `kubectl` CLI (optional)
-
-## Sample Application
-
-We'll deploy a simple Python Flask application that demonstrates:
-- Deployment configuration
-- Service exposure
-- Route creation
-- ConfigMaps and environment variables
-
-## Deployment Steps
-
-### 1. Create a New Project
-
-```bash
-oc new-project sample-app
+## Environment Configuration
+Edit `.env.example` and copy to `.env` if needed:
+```
+NAMESPACE=nextjs-sample
+IMAGE=ghcr.io/acworkma/nextjs-sample:latest
+EXPORT_DIR=exported
 ```
 
-### 2. Deploy the Application Using Manifests
-
-Apply the Kubernetes manifests provided in this lab:
-
+## 1. Build & Push Image
 ```bash
-oc apply -f deployment.yaml
-oc apply -f service.yaml
-oc apply -f route.yaml
-oc apply -f configmap.yaml
+cd lab2-deploy-app-openshift
+./scripts/build-image.sh
 ```
 
-### 3. Verify the Deployment
-
+## 2. Deploy Resources
 ```bash
-# Check deployment status
-oc get deployments
+./scripts/deploy.sh
+```
+Applies: `configmap.yaml`, `deployment.yaml`, `service.yaml`, `route.yaml`.
 
-# Check pods
-oc get pods
+## 3. Validate Deployment
+```bash
+./scripts/validate.sh
+```
+Checks rollout, service, route, and health endpoint (`/api/health`).
 
-# Check service
-oc get svc
+## 4. Access Application
+```bash
+ROUTE=$(oc get route nextjs-sample -o jsonpath='{.spec.host}')
+curl http://$ROUTE/api/health
+```
+Expect JSON `{"status":"ok" ...}`.
 
-# Check route
-oc get route
+## 5. Export (Optional)
+```bash
+./scripts/export-config.sh
+ls exported/
 ```
 
-### 4. Access the Application
-
+## 6. Scale (Optional)
 ```bash
-# Get the application URL
-ROUTE_URL=$(oc get route sample-app -o jsonpath='{.spec.host}')
-echo "Application URL: http://$ROUTE_URL"
-
-# Test the application
-curl http://$ROUTE_URL
+oc scale deployment/nextjs-sample --replicas=3
+oc get pods -l app=nextjs-sample
 ```
 
-### 5. Scale the Application
-
+## 7. Cleanup
 ```bash
-# Scale to 3 replicas
-oc scale deployment/sample-app --replicas=3
-
-# Verify scaling
-oc get pods
-```
-
-## Alternative: Deploy Using Source-to-Image (S2I)
-
-OpenShift can build container images directly from source code:
-
-```bash
-# Create a new app from Git repository
-oc new-app python:3.9~https://github.com/sclorg/django-ex.git
-
-# Expose the service
-oc expose svc/django-ex
-
-# Get the route
-oc get route django-ex
+./scripts/cleanup.sh
 ```
 
 ## Application Details
-
-The sample application includes:
-- **Deployment**: Defines the application pods and replicas
-- **Service**: Provides internal load balancing
-- **Route**: Exposes the service externally
-- **ConfigMap**: Stores configuration data
-
-## Monitoring
-
-### View Logs
-
-```bash
-# Get logs from a specific pod
-POD_NAME=$(oc get pods -l app=sample-app -o jsonpath='{.items[0].metadata.name}')
-oc logs $POD_NAME
-
-# Stream logs
-oc logs -f $POD_NAME
-```
-
-### Describe Resources
-
-```bash
-oc describe deployment sample-app
-oc describe pod $POD_NAME
-```
+- Image: `ghcr.io/acworkma/nextjs-sample:latest`
+- Container port: 3000 (Service exposes 80 → 3000)
+- Health endpoint: `/api/health`
+- ConfigMap keys: `app.message`, `app.environment` → env vars `APP_MESSAGE`, `APP_ENVIRONMENT`
+- Replicas: 2 default
 
 ## Troubleshooting
-
-### Pod Not Starting
-
-```bash
-oc describe pod <pod-name>
-oc logs <pod-name>
-```
-
-### Service Not Accessible
-
-```bash
-oc get endpoints
-oc describe service sample-app
-```
-
-## Export Application Configuration
-
-Export the application configuration for migration:
-
-```bash
-# Export deployment
-oc get deployment sample-app -o yaml > sample-app-deployment.yaml
-
-# Export service
-oc get service sample-app -o yaml > sample-app-service.yaml
-
-# Export route
-oc get route sample-app -o yaml > sample-app-route.yaml
-
-# Export configmap
-oc get configmap sample-app-config -o yaml > sample-app-configmap.yaml
-```
-
-## Clean Up
-
-```bash
-# Delete the project (removes all resources)
-oc delete project sample-app
-```
+| Issue | Action |
+|-------|--------|
+| Image pull error | Verify push & GHCR visibility (public or token). |
+| Route not resolving | Wait a few seconds; check `oc get route`. |
+| Health failing | Check logs `oc logs deployment/nextjs-sample`. |
+| Env vars missing | Confirm ConfigMap applied before Deployment. |
 
 ## Next Steps
+Continue to [Lab 3](../lab3-deploy-aks/README.md) for AKS deployment.
 
-Proceed to [Lab 3](../lab3-deploy-aks/README.md) to deploy an Azure Kubernetes Service cluster.
-
-## Additional Resources
-
-- [OpenShift Developer Guide](https://docs.openshift.com/container-platform/latest/applications/creating_applications/creating-applications.html)
-- [Source-to-Image (S2I)](https://docs.openshift.com/container-platform/latest/openshift_images/using-s21.html)
+---
+This lab provides a single, consistent workflow (build → push → deploy → validate → export → cleanup) without S2I alternatives for clarity.

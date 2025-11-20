@@ -14,74 +14,40 @@ if [[ -f .env ]]; then
   export $(grep -v '^#' .env | xargs -d '\n' 2>/dev/null) || true
 fi
 
-NAMESPACE="${NAMESPACE:-sample-app}"
-APP_NAME="${APP_NAME:-sample-app}"
+NAMESPACE="${NAMESPACE:-nextjs-sample}"
+APP_NAME="nextjs-sample"
 
-# Detect CLI
-if command -v oc >/dev/null 2>&1 && oc whoami >/dev/null 2>&1; then
-  CLI="oc"
-  CLUSTER_TYPE="openshift"
-elif command -v kubectl >/dev/null 2>&1 && kubectl cluster-info >/dev/null 2>&1; then
-  CLI="kubectl"
-  CLUSTER_TYPE="kubernetes"
-else
-  fail "No cluster connection found"
-fi
+if ! command -v oc >/dev/null 2>&1 || ! oc whoami >/dev/null 2>&1; then
+  fail "Not logged into OpenShift (oc)."; fi
 
 log "Validating deployment in namespace: $NAMESPACE"
 
-# Check namespace exists
-if ! $CLI get namespace "$NAMESPACE" >/dev/null 2>&1; then
-  fail "Namespace $NAMESPACE does not exist"
-fi
+oc get namespace "$NAMESPACE" >/dev/null 2>&1 || fail "Namespace $NAMESPACE missing"
 pass "Namespace exists"
 
-# Check ConfigMap
-if ! $CLI get configmap sample-app-config -n "$NAMESPACE" >/dev/null 2>&1; then
-  fail "ConfigMap sample-app-config not found"
-fi
+oc get configmap sample-app-config -n "$NAMESPACE" >/dev/null 2>&1 || fail "ConfigMap sample-app-config missing"
 pass "ConfigMap exists"
 
-# Check Deployment
-if ! $CLI get deployment "$APP_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
-  fail "Deployment $APP_NAME not found"
-fi
+oc get deployment "$APP_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || fail "Deployment $APP_NAME missing"
 pass "Deployment exists"
 
-# Check replicas
-READY_REPLICAS=$($CLI get deployment "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
-DESIRED_REPLICAS=$($CLI get deployment "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}')
-if [[ "$READY_REPLICAS" != "$DESIRED_REPLICAS" ]]; then
-  fail "Only $READY_REPLICAS/$DESIRED_REPLICAS pods ready"
-fi
-pass "All $READY_REPLICAS pods ready"
+READY=$(oc get deployment "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)
+DESIRED=$(oc get deployment "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}')
+[[ "$READY" == "$DESIRED" ]] || fail "Only $READY/$DESIRED pods ready"
+pass "All $READY pods ready"
 
-# Check Service
-if ! $CLI get service "$APP_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
-  fail "Service $APP_NAME not found"
-fi
+oc get service "$APP_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || fail "Service missing"
 pass "Service exists"
 
-# Check Route/Ingress
-if [[ "$CLUSTER_TYPE" == "openshift" ]]; then
-  if ! $CLI get route "$APP_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
-    fail "Route $APP_NAME not found"
-  fi
-  pass "Route exists"
-  
-  ROUTE_URL=$($CLI get route "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}')
-  log "Testing endpoint: http://$ROUTE_URL"
-  if curl -sf "http://$ROUTE_URL" >/dev/null 2>&1; then
-    pass "Application endpoint is accessible"
-  else
-    err "Application endpoint not accessible (may still be starting)"
-  fi
-else
-  if ! $CLI get ingress "$APP_NAME" -n "$NAMESPACE" >/dev/null 2>&1; then
-    fail "Ingress $APP_NAME not found"
-  fi
-  pass "Ingress exists"
-  log "Test with: kubectl port-forward -n $NAMESPACE svc/$APP_NAME 8080:80"
-fi
+oc get route "$APP_NAME" -n "$NAMESPACE" >/dev/null 2>&1 || fail "Route missing"
+pass "Route exists"
 
-pass "Validation complete - all checks passed!"
+HOST=$(oc get route "$APP_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.host}')
+URL="http://$HOST/api/health"
+log "Testing health endpoint: $URL"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL")
+[[ "$CODE" == "200" ]] || fail "Health check returned $CODE"
+pass "Health endpoint OK (200)"
+
+pass "Validation complete"
+

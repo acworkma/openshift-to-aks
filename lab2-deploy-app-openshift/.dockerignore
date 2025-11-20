@@ -1,0 +1,13 @@
+node_modules
+.next/cache
+npm-debug.log
+Dockerfile
+.git
+.gitignore
+*.md
+scripts
+deployment.yaml
+service.yaml
+route.yaml
+configmap.yaml
+.env
