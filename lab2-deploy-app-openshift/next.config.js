@@ -1,6 +1,1 @@
-/** @type {import('next').NextConfig} */
-const nextConfig = {
-  poweredByHeader: false,
-  reactStrictMode: true,
-};
-module.exports = nextConfig;
+// Removed. Application source not needed for this lab.
