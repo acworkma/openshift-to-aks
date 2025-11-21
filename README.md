@@ -105,21 +105,5 @@ cd lab3-deploy-aks
 az aro delete --resource-group $RESOURCEGROUP --name $CLUSTER --yes
 az group delete --name $RESOURCEGROUP --yes
 ```
-
-## Contributing
-1. Copy existing lab folder pattern: `labs/<service-name>/` (see Azure Lab Guidelines in `.github/copilot-instructions.md`).  
-2. Include required files: `README.md`, `infrastructure/main.bicep` (if infra), `parameters.example.json`, scripts (`deploy.sh`, `validate.sh`, `cleanup.sh`), optional `tests/`.  
-3. Follow README section order: Overview, Prerequisites, Deployment, Validation, Cleanup, (Troubleshooting).  
-4. Sanitize all examples (no secrets).  
-5. Run validation scripts and (optional) `az bicep build` before PR.  
-
-## Extensions / Next Steps
-- Helm chart or Kustomize generation from transformed manifests  
-- PVC storageClass mapping automation (lookup AKS classes)  
-- Image signing / provenance (cosign) integration  
-- CI/CD pipeline (GitHub Actions) for migration verification  
-- Policy scanning (Azure Policy / Gatekeeper) post-deployment  
-- CRD selective migration or conversion templates  
-
 ## License / Usage
 Internal lab and migration acceleration materials. Adapt for enterprise scenarios ensuring compliance with security and governance standards.
