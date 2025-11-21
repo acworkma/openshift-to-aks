@@ -1,15 +1,16 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: sample-app
+  name: nextjs-sample
   labels:
-    app: sample-app
+    app: nextjs-sample
 spec:
   selector:
-    app: sample-app
+    app: nextjs-sample
   ports:
   - name: http
     port: 80
-    targetPort: 9876
+    targetPort: 3000
     protocol: TCP
   type: ClusterIP
+

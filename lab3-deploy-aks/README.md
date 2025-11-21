@@ -1,215 +1,59 @@
-# Lab 3: Deploy Azure Kubernetes Service (AKS)
 
-This lab guides you through deploying an Azure Kubernetes Service (AKS) cluster.
+
+# AKS Cluster and Azure Container Registry Lab
+
+## Overview
+This lab provisions a blank Azure Kubernetes Service (AKS) cluster and an Azure Container Registry (ACR) using Bicep infrastructure-as-code and deployment scripts. The ACR is configured for use in Lab 4 to migrate container images from OpenShift to AKS. No application is deployed—focus is solely on cluster and registry creation, validation, and credential management.
 
 ## Prerequisites
+- Azure CLI (`az`)
+- `kubectl` CLI
+- Contributor access to an Azure subscription
 
-- Azure subscription
-- Azure CLI installed and configured
-- Contributor access to the Azure subscription
-- `kubectl` CLI installed
-
-## Architecture Overview
-
-Azure Kubernetes Service (AKS) is a managed Kubernetes service that makes it simple to deploy and manage containerized applications.
-
-## Deployment Steps
-
-### 1. Set Environment Variables
-
+## Deployment
 ```bash
-export LOCATION=eastus
-export RESOURCEGROUP=aks-rg
-export CLUSTER_NAME=aks-cluster
-export NODE_COUNT=3
-export NODE_SIZE=Standard_D2s_v3
+# Create resource group (if not exists)
+az group create --name rg-aks-lab3-aue --location australiaeast
+
+# Deploy AKS and ACR (Bicep)
+./scripts/deploy.sh
 ```
+The script provisions:
+- AKS cluster named `aks-lab3` in `australiaeast`
+- ACR instance with a unique name (e.g., `acrlab3<uniquestring>`)
+- Outputs ACR name, login server, admin username, and admin password to `.env` for Lab 4
 
-### 2. Create Resource Group
-
+## Validation
 ```bash
-az group create \
-  --name $RESOURCEGROUP \
-  --location $LOCATION
+./scripts/validate.sh
 ```
+Expected: PASS for AKS cluster readiness, ACR existence, and ACR admin credentials.
 
-### 3. Create AKS Cluster
+The script validates:
+- AKS cluster provisioning status and node availability
+- ACR registry existence and admin credentials retrieval
 
+## ACR Credentials for Lab 4
+After deployment, `.env` contains:
+```dotenv
+ACR_NAME=<acr-name>
+ACR_LOGIN_SERVER=<acr-login-server>
+ACR_ADMIN_USERNAME=<admin-username>
+ACR_ADMIN_PASSWORD=<admin-password>
+```
+These credentials are used by Lab 4 to import container images into ACR during migration.
+
+## Cleanup
 ```bash
-az aks create \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME \
-  --node-count $NODE_COUNT \
-  --node-vm-size $NODE_SIZE \
-  --enable-managed-identity \
-  --generate-ssh-keys \
-  --network-plugin azure \
-  --network-policy azure \
-  --load-balancer-sku standard \
-  --enable-cluster-autoscaler \
-  --min-count 1 \
-  --max-count 5
+./scripts/cleanup.sh
 ```
+This deletes the AKS cluster and ACR registry (and optionally the resource group if `CLEANUP_DELETE_RG=true` in `.env`).
 
-Note: This can take 5-10 minutes to complete.
-
-### 4. Get Cluster Credentials
-
-```bash
-az aks get-credentials \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME
-```
-
-This merges the cluster credentials into your `~/.kube/config` file.
-
-### 5. Verify the Cluster
-
-```bash
-# Check nodes
-kubectl get nodes
-
-# Check system pods
-kubectl get pods -n kube-system
-
-# Get cluster info
-kubectl cluster-info
-```
-
-## Advanced Configuration
-
-### Enable Azure Container Registry (ACR) Integration
-
-```bash
-# Create ACR
-ACR_NAME=myaksacr$RANDOM
-az acr create \
-  --resource-group $RESOURCEGROUP \
-  --name $ACR_NAME \
-  --sku Basic
-
-# Attach ACR to AKS
-az aks update \
-  --name $CLUSTER_NAME \
-  --resource-group $RESOURCEGROUP \
-  --attach-acr $ACR_NAME
-```
-
-### Enable Azure Monitor for Containers
-
-```bash
-az aks enable-addons \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME \
-  --addons monitoring
-```
-
-### Enable Azure Key Vault Provider for Secrets Store CSI Driver
-
-```bash
-az aks enable-addons \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME \
-  --addons azure-keyvault-secrets-provider
-```
-
-## ARM Template Deployment (Alternative)
-
-An ARM template is provided for automated deployment. See `deploy-aks.json` for details.
-
-```bash
-az deployment group create \
-  --resource-group $RESOURCEGROUP \
-  --template-file deploy-aks.json \
-  --parameters @parameters.json
-```
-
-## Kubectl Context Management
-
-```bash
-# List contexts
-kubectl config get-contexts
-
-# Switch context
-kubectl config use-context $CLUSTER_NAME
-
-# View current context
-kubectl config current-context
-```
-
-## Accessing the Kubernetes Dashboard
-
-```bash
-# Browse the dashboard
-az aks browse \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME
-```
-
-## Namespace Creation
-
-Create a namespace for your migrated application:
-
-```bash
-kubectl create namespace sample-app
-```
-
-## Network Configuration
-
-### View Network Configuration
-
-```bash
-az aks show \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME \
-  --query networkProfile
-```
-
-### Configure Load Balancer
-
-```bash
-# Get the load balancer public IP
-az network public-ip list \
-  --resource-group $(az aks show --resource-group $RESOURCEGROUP --name $CLUSTER_NAME --query nodeResourceGroup -o tsv) \
-  --query "[0].ipAddress" -o tsv
-```
-
-## Cluster Upgrade
-
-```bash
-# Get available versions
-az aks get-upgrades \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME
-
-# Upgrade cluster
-az aks upgrade \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME \
-  --kubernetes-version <version>
-```
-
-## Clean Up
-
-When you're done, delete the resource group:
-
-```bash
-az aks delete \
-  --resource-group $RESOURCEGROUP \
-  --name $CLUSTER_NAME \
-  --yes
-
-az group delete \
-  --name $RESOURCEGROUP \
-  --yes
-```
+## (Optional) Advanced/Reference
+- Infrastructure template: see `infrastructure/main.bicep` and `parameters.example.json` for Bicep definitions.
+- For advanced AKS config: [AKS Documentation](https://docs.microsoft.com/azure/aks/)
+- For ACR best practices: [ACR Documentation](https://docs.microsoft.com/azure/container-registry/)
 
 ## Next Steps
+Continue to [Lab 4](../lab4-migration-script/README.md) to migrate workloads from OpenShift to AKS, including container image migration to the ACR provisioned in this lab.
 
-Proceed to [Lab 4](../lab4-migration-script/README.md) to use the Python migration script to move your application from OpenShift to AKS.
-
-## Additional Resources
-
-- [AKS Documentation](https://docs.microsoft.com/azure/aks/)
-- [Kubernetes Documentation](https://kubernetes.io/docs/)
-- [AKS Best Practices](https://docs.microsoft.com/azure/aks/best-practices)

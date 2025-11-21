@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: '{"apiVersion":"v1","kind":"Service","metadata":{"annotations":{},"labels":{"app":"nextjs-sample"},"name":"nextjs-sample","namespace":"nextjs-sample"},"spec":{"ports":[{"name":"http","port":80,"protocol":"TCP","targetPort":3000}],"selector":{"app":"nextjs-sample"},"type":"ClusterIP"}}
+
+      '
+  creationTimestamp: '2025-11-20T04:15:09+00:00'
+  labels:
+    app: nextjs-sample
+  managedFields:
+  - apiVersion: v1
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:metadata:
+        f:annotations:
+          .: {}
+          f:kubectl.kubernetes.io/last-applied-configuration: {}
+        f:labels:
+          .: {}
+          f:app: {}
+      f:spec:
+        f:internalTrafficPolicy: {}
+        f:ports:
+          .: {}
+          k:{"port":80,"protocol":"TCP"}:
+            .: {}
+            f:name: {}
+            f:port: {}
+            f:protocol: {}
+            f:targetPort: {}
+        f:selector: {}
+        f:sessionAffinity: {}
+        f:type: {}
+    manager: kubectl-client-side-apply
+    operation: Update
+    time: '2025-11-20T04:15:09+00:00'
+  name: nextjs-sample
+  namespace: nextjs-sample
+  resourceVersion: '97970'
+  uid: 1b3f49ec-e302-43ab-958c-769f06047e13
+spec:
+  clusterIP: 172.30.184.214
+  clusterIPs:
+  - 172.30.184.214
+  internalTrafficPolicy: Cluster
+  ipFamilies:
+  - IPv4
+  ipFamilyPolicy: SingleStack
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: 3000
+  selector:
+    app: nextjs-sample
+  sessionAffinity: None
+  type: ClusterIP
+status:
+  loadBalancer: {}

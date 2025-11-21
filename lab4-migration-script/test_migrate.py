@@ -87,7 +87,7 @@ def test_resource_transformation():
     }
     
     migrator = OpenShiftToAKSMigrator()
-    transformed = migrator.transform_resource(resource)
+    transformed = migrator.transform_resource(resource, registry_rewrite="myregistry.example.com", target_namespace="newns")
     
     # Validate transformation
     assert 'uid' not in transformed['metadata'], "UID should be removed"
@@ -98,6 +98,29 @@ def test_resource_transformation():
     assert 'status' not in transformed, "Status should be removed"
     assert 'openshift.io/generated-by' not in transformed['metadata']['annotations'], "OpenShift annotations should be removed"
     assert 'kubectl.kubernetes.io/last-applied-configuration' in transformed['metadata']['annotations'], "Non-OpenShift annotations should be kept"
+    assert transformed['metadata']['namespace'] == 'newns', "Namespace should be remapped"
+
+    # Test registry rewrite on synthetic deployment
+    deployment = {
+        'apiVersion': 'apps/v1',
+        'kind': 'Deployment',
+        'metadata': {'name': 'demo', 'namespace': 'orig'},
+        'spec': {
+            'template': {
+                'spec': {
+                    'containers': [
+                        {'name': 'c1', 'image': 'quay.io/org/app:1.0'},
+                        {'name': 'c2', 'image': 'docker.io/library/busybox:latest'}
+                    ]
+                }
+            }
+        }
+    }
+    dep_tx = migrator.transform_resource(deployment, registry_rewrite="myacr.azurecr.io", target_namespace="target")
+    images = [c['image'] for c in dep_tx['spec']['template']['spec']['containers']]
+    assert images[0].startswith('myacr.azurecr.io/'), "First image registry should be rewritten"
+    assert images[1].startswith('myacr.azurecr.io/'), "Second image registry should be rewritten"
+    assert dep_tx['metadata']['namespace'] == 'target', "Deployment namespace should be remapped"
     
     print("✓ Resource transformation test passed")
 

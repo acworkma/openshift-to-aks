@@ -1,0 +1,64 @@
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: '{"apiVersion":"route.openshift.io/v1","kind":"Route","metadata":{"annotations":{},"labels":{"app":"nextjs-sample"},"name":"nextjs-sample","namespace":"nextjs-sample"},"spec":{"port":{"targetPort":"http"},"to":{"kind":"Service","name":"nextjs-sample"},"wildcardPolicy":"None"}}
+
+      '
+    openshift.io/host.generated: 'true'
+  creationTimestamp: '2025-11-20T04:15:10Z'
+  labels:
+    app: nextjs-sample
+  managedFields:
+  - apiVersion: route.openshift.io/v1
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:metadata:
+        f:annotations:
+          .: {}
+          f:kubectl.kubernetes.io/last-applied-configuration: {}
+        f:labels:
+          .: {}
+          f:app: {}
+      f:spec:
+        f:port:
+          .: {}
+          f:targetPort: {}
+        f:to:
+          f:kind: {}
+          f:name: {}
+          f:weight: {}
+        f:wildcardPolicy: {}
+    manager: kubectl-client-side-apply
+    operation: Update
+    time: '2025-11-20T04:15:10Z'
+  - apiVersion: route.openshift.io/v1
+    fieldsType: FieldsV1
+    fieldsV1:
+      f:status:
+        f:ingress: {}
+    manager: openshift-router
+    operation: Update
+    subresource: status
+    time: '2025-11-20T04:15:10Z'
+  name: nextjs-sample
+  namespace: nextjs-sample
+  resourceVersion: '97995'
+  uid: 1f6d0d77-0162-4c3d-985d-556cec25c6c0
+spec:
+  host: nextjs-sample-nextjs-sample.apps.v8d74tps.australiaeast.aroapp.io
+  port:
+    targetPort: http
+  to:
+    kind: Service
+    name: nextjs-sample
+    weight: 100
+  wildcardPolicy: None
+status:
+  ingress:
+  - conditions:
+    - lastTransitionTime: '2025-11-20T04:15:10Z'
+      status: 'True'
+      type: Admitted
+    host: nextjs-sample-nextjs-sample.apps.v8d74tps.australiaeast.aroapp.io
+    routerCanonicalHostname: router-default.apps.v8d74tps.australiaeast.aroapp.io
+    routerName: default
+    wildcardPolicy: None

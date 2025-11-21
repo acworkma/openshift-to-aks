@@ -1,187 +1,109 @@
 # OpenShift to AKS Migration Labs
 
-This repository contains a comprehensive set of labs and tools for migrating applications from Azure Red Hat OpenShift (ARO) to Azure Kubernetes Service (AKS).
+End-to-end guided journey to: (1) deploy Azure Red Hat OpenShift (ARO), (2) deploy a sample Next.js workload on OpenShift, (3) provision an Azure Kubernetes Service (AKS) cluster + Azure Container Registry (ACR), and (4) migrate application resources and container images from OpenShift to AKS using an automated Python migration script.
 
-## Overview
+## Lab Index
+| Lab | Folder | Purpose | Key Entry Command |
+|-----|--------|---------|-------------------|
+| 1 | `lab1-deploy-aro/` | Deploy an ARO cluster (managed identity pattern) | External repo (see lab README) |
+| 2 | `lab2-deploy-app-openshift/` | Deploy public Next.js image + Route on ARO | `./scripts/deploy.sh` |
+| 3 | `lab3-deploy-aks/` | Provision blank AKS + ACR and emit creds to `.env` | `./scripts/deploy.sh` |
+| 4 | `lab4-migration-script/` | Export → Transform → (Import Images) → Apply to AKS | `python migrate.py migrate ...` |
 
-These hands-on labs guide you through the complete process of deploying OpenShift and AKS clusters, deploying sample applications, and using automated tools to migrate workloads between platforms.
-
-## Labs
-
-### [Lab 1: Deploy Azure Red Hat OpenShift (ARO)](./lab1-deploy-aro/README.md)
-
-Learn how to deploy a fully managed Azure Red Hat OpenShift cluster using Azure CLI and ARM templates.
-
-**What you'll learn:**
-- Set up Azure Red Hat OpenShift cluster
-- Configure networking and subnets
-- Access the OpenShift console and CLI
-- Understand ARO architecture
-
-**Time:** ~45 minutes (including cluster deployment)
-
-### [Lab 2: Deploy Sample Application to OpenShift](./lab2-deploy-app-openshift/README.md)
-
-Deploy a sample application to your OpenShift cluster to understand OpenShift-specific concepts.
-
-**What you'll learn:**
-- Deploy applications using OpenShift manifests
-- Work with Deployments, Services, and Routes
-- Use ConfigMaps for configuration
-- Scale applications in OpenShift
-- Export application configurations
-
-**Time:** ~30 minutes
-
-### [Lab 3: Deploy Azure Kubernetes Service (AKS)](./lab3-deploy-aks/README.md)
-
-Set up an Azure Kubernetes Service cluster as the migration target.
-
-**What you'll learn:**
-- Deploy AKS cluster with Azure CLI
-- Configure cluster autoscaling
-- Set up Azure Container Registry integration
-- Enable monitoring and add-ons
-- Understand AKS networking
-
-**Time:** ~30 minutes
-
-### [Lab 4: Migration Script - OpenShift to AKS](./lab4-migration-script/README.md)
-
-Use a Python-based migration tool to automatically migrate applications from ARO to AKS.
-
-**What you'll learn:**
-- Document OpenShift applications
-- Transform OpenShift resources to Kubernetes
-- Convert Routes to Ingress
-- Deploy applications to AKS
-- Verify successful migration
-
-**Time:** ~45 minutes
-
-## Prerequisites
-
-Before starting these labs, ensure you have:
-
-- **Azure Subscription**: Active subscription with Contributor access
-- **Azure CLI**: Version 2.30.0 or later ([Install](https://docs.microsoft.com/cli/azure/install-azure-cli))
-- **OpenShift CLI (oc)**: Latest version ([Install](https://docs.openshift.com/container-platform/latest/cli_reference/openshift_cli/getting-started-cli.html))
-- **kubectl**: Version 1.25 or later ([Install](https://kubernetes.io/docs/tasks/tools/))
-- **Python**: Version 3.8 or later (for Lab 4)
-- **Git**: For cloning this repository
-
-## Quick Start
-
+## Quick Start (Happy Path)
 ```bash
-# Clone this repository
-git clone https://github.com/acworkma/openshift-to-aks.git
-cd openshift-to-aks
+# 1. Deploy ARO (follow Lab 1 instructions externally)
+# 2. Deploy sample app on OpenShift
+cd lab2-deploy-app-openshift
+./scripts/deploy.sh
+./scripts/validate.sh
 
-# Follow the labs in order
-cd lab1-deploy-aro
-# ... follow instructions in README.md
-
-cd ../lab2-deploy-app-openshift
-# ... follow instructions in README.md
-
+# 3. Provision AKS + ACR
 cd ../lab3-deploy-aks
-# ... follow instructions in README.md
+./scripts/deploy.sh
+./scripts/validate.sh
+# Review generated .env (ACR_* vars)
 
+# 4. Migrate application to AKS with ACR image import
 cd ../lab4-migration-script
-# ... follow instructions in README.md
+pip install -r requirements.txt
+python migrate.py migrate \
+  --namespace nextjs-sample \
+  --source-context <openshift-context> \
+  --target-context <aks-context> \
+  --output ./migrated \
+  --acr-env-path ../lab3-deploy-aks/.env \
+  --apply
+
+# 5. Validate on AKS
+kubectl get ingress -n nextjs-sample
+curl -I http://<ingress-host>/
 ```
 
-## Architecture
-
-```
-┌─────────────────────────┐         ┌─────────────────────────┐
-│  Azure Red Hat OpenShift │         │   Azure Kubernetes      │
-│        (ARO)             │         │      Service (AKS)      │
-│                          │         │                         │
-│  ┌────────────────────┐ │         │  ┌────────────────────┐ │
-│  │  Sample App        │ │         │  │  Migrated App      │ │
-│  │  - Deployment      │ │         │  │  - Deployment      │ │
-│  │  - Service         │ │──────▶  │  │  - Service         │ │
-│  │  - Route           │ │ Migrate │  │  - Ingress         │ │
-│  │  - ConfigMap       │ │         │  │  - ConfigMap       │ │
-│  └────────────────────┘ │         │  └────────────────────┘ │
-│                          │         │                         │
-└─────────────────────────┘         └─────────────────────────┘
-            │                                   │
-            └───────────────┬───────────────────┘
-                            │
-                  ┌─────────▼──────────┐
-                  │  Migration Script  │
-                  │   (Python)         │
-                  │  - Document        │
-                  │  - Transform       │
-                  │  - Deploy          │
-                  └────────────────────┘
+## Architecture Flow
+```mermaid
+flowchart LR
+  A[OpenShift Cluster] -->|Export resources| B[Source Manifests]
+  B -->|Extract Images| C[Image List]
+  C -->|Import to ACR| D[ACR]
+  B -->|Transform| E[AKS Manifests]
+  D -->|Rewrite Image References| E
+  E -->|Apply| F[AKS Namespace]
+  F -->|Validate| G[Ingress Endpoint]
 ```
 
-## Key Features
+## Prerequisites (Global)
+- Azure subscription + Contributor (for AKS/ACR/ARO)  
+- CLI Tools: `az`, `kubectl`, `oc` (Labs 1–2 & source context), `docker` (fallback image import), `jq` (Lab 3), `curl` (validation)  
+- Python 3.8+ (Lab 4)  
+- Network reachability from environment to source registries and Azure endpoints  
+- A Red Hat pull secret (optional for ARO advanced scenarios)  
 
-- **Automated Migration**: Python script handles resource transformation
-- **Route to Ingress**: Automatic conversion of OpenShift Routes to Kubernetes Ingress
-- **Resource Documentation**: Export all application resources from OpenShift
-- **Best Practices**: Follows Azure and Kubernetes best practices
-- **Comprehensive Labs**: Step-by-step instructions with examples
+## Environment & Secrets
+- Lab 3 writes ACR admin credentials to `.env`; DO NOT COMMIT this file. Ensure `.env` is listed in `.gitignore` (already handled).  
+- The migration script (`lab4-migration-script/migrate.py`) loads ACR creds via `--acr-env-path`.  
+- Any additional secrets (e.g., GHCR token) should be added to local `.env` only and never pushed.  
+- Review exported OpenShift `secrets.yaml` before applying to AKS; prune or rotate credentials.  
 
-## Migration Process
+## Migration Script Features (Lab 4)
+- Export: Deployments, StatefulSets, Jobs, CronJobs, Services, ConfigMaps, Secrets, PVCs, ServiceAccounts, DeploymentConfigs, Routes (warns on SCCs/CRDs, BuildConfigs, ImageStreams, Templates).  
+- Image Handling: Extract all referenced container images; import to ACR (`az acr import` with auth fallback to docker pull/tag/push); rewrite image registry to ACR login server.  
+- Transformations: Routes → Ingress (nginx class), DeploymentConfig → Deployment, service `clusterIP/clusterIPs` stripped, metadata/status removed, optional namespace override, PVC storageClass placeholder for manual adjustment.  
+- Apply: Optionally create resources on AKS; idempotent-friendly (existing objects reported).  
+- Reporting: Source and AKS manifest directories + `migration-report.json`.  
 
-1. **Document**: Extract all resources from OpenShift application
-2. **Transform**: Convert OpenShift-specific resources to standard Kubernetes
-3. **Validate**: Review transformed resources
-4. **Deploy**: Apply resources to AKS cluster
-5. **Verify**: Test the migrated application
-
-## Common Migration Scenarios
-
-### Routes to Ingress
-OpenShift Routes are automatically converted to Kubernetes Ingress resources with appropriate annotations.
-
-### DeploymentConfigs to Deployments
-DeploymentConfigs are transformed to standard Kubernetes Deployments.
-
-### Image References
-Image registry references are updated to work with Azure Container Registry or other registries.
-
-### Security Contexts
-Security contexts are adjusted to work with AKS security policies.
-
-## Support and Contributions
-
-This is a learning resource for understanding application migration from OpenShift to AKS. 
-
-### Contributing
-Contributions are welcome! Please feel free to submit issues or pull requests.
-
-### Getting Help
-- Review the individual lab README files for detailed instructions
-- Check the [Azure Documentation](https://docs.microsoft.com/azure/)
-- Visit the [OpenShift Documentation](https://docs.openshift.com/)
-
-## Clean Up
-
-After completing the labs, remember to clean up resources to avoid charges:
-
+## Validation (Cross-Lab)
+- ARO: `oc get nodes`, `oc get clusterversion`  
+- App on OpenShift: `./scripts/validate.sh` (Lab 2)  
+- AKS + ACR: `./scripts/validate.sh` (Lab 3); check `.env` outputs  
+- Post-Migration:  
 ```bash
-# Delete ARO cluster
-az aro delete --resource-group aro-rg --name aro-cluster --yes
-az group delete --name aro-rg --yes
-
-# Delete AKS cluster
-az aks delete --resource-group aks-rg --name aks-cluster --yes
-az group delete --name aks-rg --yes
+kubectl get deployments,pods,svc,ingress -n nextjs-sample
+az acr repository show-tags --name $ACR_NAME --repository nextjs-sample
+curl -I http://<ingress-host>/
 ```
 
-## Additional Resources
+## Troubleshooting (Common)
+| Symptom | Cause | Action |
+|---------|-------|--------|
+| Image not imported | Auth or registry unreachable | Re-run with `--verbose`; verify ACR creds; test `az acr import` manually. |
+| 422 Service apply | Residual `clusterIP` | Ensure transformation strips `clusterIP/clusterIPs`; re-run migration. |
+| Ingress 404 | DNS propagation or controller delay | Wait and retry; `kubectl describe ingress`. |
+| Secret mismatch | Non-portable OpenShift secret | Manually adjust or recreate using AKS conventions. |
+| CRD/SCC warnings | Out-of-scope migration items | Migrate manually or ignore if not required. |
 
-- [Azure Red Hat OpenShift Documentation](https://docs.microsoft.com/azure/openshift/)
-- [Azure Kubernetes Service Documentation](https://docs.microsoft.com/azure/aks/)
-- [OpenShift to AKS Migration Guide](https://docs.microsoft.com/azure/architecture/guide/migrate-openshift-aks)
-- [Kubernetes Best Practices](https://kubernetes.io/docs/concepts/configuration/overview/)
+## Cleanup (Unified)
+```bash
+# Remove migrated namespace from AKS
+kubectl delete namespace nextjs-sample
 
-## License
+# Delete AKS + ACR (Lab 3)
+cd lab3-deploy-aks
+./scripts/cleanup.sh
 
-This project is provided as-is for educational purposes.
+# Delete ARO cluster (Lab 1)
+az aro delete --resource-group $RESOURCEGROUP --name $CLUSTER --yes
+az group delete --name $RESOURCEGROUP --yes
+```
+## License / Usage
+Internal lab and migration acceleration materials. Adapt for enterprise scenarios ensuring compliance with security and governance standards.
