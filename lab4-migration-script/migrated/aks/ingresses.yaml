@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  labels:
+    app: nextjs-sample
+  name: nextjs-sample
+  namespace: nextjs-sample
+spec:
+  rules:
+  - host: nextjs-sample-nextjs-sample.apps.v8d74tps.australiaeast.aroapp.io
+    http:
+      paths:
+      - backend:
+          service:
+            name: nextjs-sample
+            port:
+              name: http
+        path: /
+        pathType: Prefix

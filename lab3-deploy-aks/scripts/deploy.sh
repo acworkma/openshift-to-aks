@@ -62,10 +62,11 @@ if [[ -z "$DEPLOY_OUT" ]]; then
 fi
 pass "Bicep deployment succeeded"
 
-# Parse outputs
-ACR_LOGIN_SERVER=$(echo "$DEPLOY_OUT" | grep -o '"acrLoginServer": *{"value": *"[^"]*"' | sed 's/.*"value": *"\([^"]*\)"/\1/')
-ACR_ADMIN_USERNAME=$(echo "$DEPLOY_OUT" | grep -o '"acrAdminUsername": *{"value": *"[^"]*"' | sed 's/.*"value": *"\([^"]*\)"/\1/')
-ACR_ADMIN_PASSWORD=$(echo "$DEPLOY_OUT" | grep -o '"acrAdminPassword": *{"value": *"[^"]*"' | sed 's/.*"value": *"\([^"]*\)"/\1/')
+# Parse outputs using jq for reliability
+ACR_NAME=$(echo "$DEPLOY_OUT" | jq -r '.acrName.value // empty')
+ACR_LOGIN_SERVER=$(echo "$DEPLOY_OUT" | jq -r '.acrLoginServer.value // empty')
+ACR_ADMIN_USERNAME=$(echo "$DEPLOY_OUT" | jq -r '.acrAdminUsername.value // empty')
+ACR_ADMIN_PASSWORD=$(echo "$DEPLOY_OUT" | jq -r '.acrAdminPassword.value // empty')
 
 # Write outputs to .env (append or update)
 ENV_FILE=".env"

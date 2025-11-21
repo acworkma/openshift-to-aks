@@ -1,0 +1,12 @@
+{
+  "namespace": "nextjs-sample",
+  "timestamp": "2025-11-21T00:08:19.160994",
+  "resources": {
+    "deployments": 1,
+    "serviceaccounts": 3,
+    "services": 1,
+    "configmaps": 1,
+    "secrets": 3,
+    "routes": 1
+  }
+}

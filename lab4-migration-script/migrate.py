@@ -49,86 +49,116 @@ class OpenShiftToAKSMigrator:
         """
         Extract all unique container images from workload manifests in a directory.
         """
-        image_set = set()
-        workload_files = [
-            'deployments.yaml', 'statefulsets.yaml', 'jobs.yaml', 'cronjobs.yaml', 'deploymentconfigs.yaml'
-        ]
+        image_set: Set[str] = set()
+        workload_files = ['deployments.yaml', 'statefulsets.yaml', 'jobs.yaml', 'cronjobs.yaml', 'deploymentconfigs.yaml']
         for fname in workload_files:
-            fpath = manifest_dir / fname
-            if not fpath.exists():
+            path = manifest_dir / fname
+            if not path.exists():
                 continue
-            with open(fpath, 'r') as f:
+            with open(path, 'r') as f:
                 docs = list(yaml.safe_load_all(f))
             for doc in docs:
                 if not doc:
                     continue
                 kind = doc.get('kind')
-                containers = []
+                containers: List[Dict[str, Any]] = []
                 if kind in ['Deployment', 'StatefulSet', 'DeploymentConfig']:
                     containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 elif kind == 'Job':
                     containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 elif kind == 'CronJob':
                     containers = doc.get('spec', {}).get('jobTemplate', {}).get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                # Fallback if kind missing
+                if not containers:
+                    fallback = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                    if fallback:
+                        containers = fallback
+                # Fallback via applied configuration annotation
+                if not containers and 'metadata' in doc and 'annotations' in doc['metadata']:
+                    applied_cfg = doc['metadata']['annotations'].get('kubectl.kubernetes.io/last-applied-configuration')
+                    if applied_cfg:
+                        try:
+                            applied_json = json.loads(applied_cfg)
+                            annotation_containers = applied_json.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                            if annotation_containers:
+                                containers = annotation_containers
+                        except Exception:
+                            pass
                 for c in containers:
                     image = c.get('image')
                     if image:
                         image_set.add(image)
         return image_set
 
-    def import_images_to_acr(self, images: Set[str], acr_login_server: str, acr_name: str, username: str, password: str):
-        """
-        Import images into ACR using az acr import.
+    def import_images_to_acr(self, images: Set[str], acr_login_server: str, acr_name: str,
+                              ghcr_username: Optional[str], ghcr_token: Optional[str]) -> None:
+        """Import images into ACR with authenticated fallback.
+
+        1. Try direct 'az acr import' (include GHCR source creds if provided).
+        2. On DENIED/403/UNAUTHORIZED, fallback to docker pull/tag/push.
+        Credentials are never logged.
         """
         for image in images:
-            # Only import if not already in ACR
             if image.startswith(acr_login_server):
                 self.logger.info(f"Image already in ACR: {image}")
                 continue
-            # Tag for ACR
             image_name = image.split('/')[-1]
             acr_image = f"{acr_login_server}/{image_name}"
             self.logger.info(f"Importing {image} to {acr_image}")
-            cmd = [
-                'az', 'acr', 'import',
-                '--name', acr_name,
-                '--source', image,
-                '--image', image_name,
-                '--username', username,
-                '--password', password,
-                '--force'
-            ]
+            cmd = ['az', 'acr', 'import', '--name', acr_name, '--source', image, '--image', image_name, '--force']
+            if ghcr_username and ghcr_token:
+                cmd.extend(['--username', ghcr_username, '--password', ghcr_token])
             try:
                 subprocess.run(cmd, check=True, capture_output=True)
                 self.logger.info(f"Imported {image} to {acr_image}")
             except subprocess.CalledProcessError as e:
-                self.logger.error(f"Failed to import {image}: {e.stderr.decode() if e.stderr else e}")
+                stderr = (e.stderr.decode() if e.stderr else '').upper()
+                self.logger.warning(f"Direct import failed for {image}; attempting Docker fallback.")
+                if any(token in stderr for token in ['DENIED', '403', 'UNAUTHORIZED']):
+                    try:
+                        if ghcr_username and ghcr_token:
+                            self.logger.info("Logging into GHCR for fallback")
+                            subprocess.run(['docker','login','ghcr.io','-u',ghcr_username,'--password-stdin'],
+                                           input=ghcr_token.encode(), check=True, capture_output=True)
+                        self.logger.info(f"Pulling source image {image}")
+                        subprocess.run(['docker','pull',image], check=True, capture_output=True)
+                        self.logger.info(f"Logging into ACR {acr_name}")
+                        subprocess.run(['az','acr','login','--name',acr_name], check=True, capture_output=True)
+                        self.logger.info(f"Tagging {image} as {acr_image}")
+                        subprocess.run(['docker','tag',image,acr_image], check=True, capture_output=True)
+                        self.logger.info(f"Pushing {acr_image}")
+                        subprocess.run(['docker','push',acr_image], check=True, capture_output=True)
+                        self.logger.info(f"Fallback push complete for {image}")
+                    except subprocess.CalledProcessError as fe:
+                        self.logger.error(f"Fallback failed for {image}: {(fe.stderr.decode() if fe.stderr else fe)}")
+                else:
+                    self.logger.error(f"Import failed for {image}: {(e.stderr.decode() if e.stderr else e)}")
 
     def rewrite_images_for_acr(self, manifest_dir: Path, acr_login_server: str):
         """
         Rewrite all image references in workload manifests to use the ACR login server.
         """
-        workload_files = [
-            'deployments.yaml', 'statefulsets.yaml', 'jobs.yaml', 'cronjobs.yaml', 'deploymentconfigs.yaml'
-        ]
+        workload_files = ['deployments.yaml', 'statefulsets.yaml', 'jobs.yaml', 'cronjobs.yaml', 'deploymentconfigs.yaml']
         for fname in workload_files:
-            fpath = manifest_dir / fname
-            if not fpath.exists():
+            path = manifest_dir / fname
+            if not path.exists():
                 continue
-            with open(fpath, 'r') as f:
+            with open(path, 'r') as f:
                 docs = list(yaml.safe_load_all(f))
             changed = False
             for doc in docs:
                 if not doc:
                     continue
                 kind = doc.get('kind')
-                containers = []
+                containers: List[Dict[str, Any]] = []
                 if kind in ['Deployment', 'StatefulSet', 'DeploymentConfig']:
                     containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 elif kind == 'Job':
                     containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 elif kind == 'CronJob':
                     containers = doc.get('spec', {}).get('jobTemplate', {}).get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
+                if not containers:
+                    containers = doc.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 for c in containers:
                     image = c.get('image')
                     if image and not image.startswith(acr_login_server):
@@ -136,7 +166,7 @@ class OpenShiftToAKSMigrator:
                         c['image'] = f"{acr_login_server}/{image_name}"
                         changed = True
             if changed:
-                with open(fpath, 'w') as f:
+                with open(path, 'w') as f:
                     yaml.dump_all(docs, f, default_flow_style=False)
 
     def document_application(self, namespace: str, output_dir: str) -> Dict[str, Any]:
@@ -178,6 +208,9 @@ class OpenShiftToAKSMigrator:
             deployment_list = []
             for deployment in deployments.items:
                 deployment_dict = client.ApiClient().sanitize_for_serialization(deployment)
+                # Ensure kind/apiVersion present for downstream processing
+                deployment_dict.setdefault('kind', 'Deployment')
+                deployment_dict.setdefault('apiVersion', 'apps/v1')
                 deployment_list.append(deployment_dict)
             if deployment_list:
                 with open(output_path / 'deployments.yaml', 'w') as f:
@@ -193,6 +226,8 @@ class OpenShiftToAKSMigrator:
             ss_list = []
             for ss in statefulsets.items:
                 ss_dict = client.ApiClient().sanitize_for_serialization(ss)
+                ss_dict.setdefault('kind', 'StatefulSet')
+                ss_dict.setdefault('apiVersion', 'apps/v1')
                 ss_list.append(ss_dict)
             if ss_list:
                 with open(output_path / 'statefulsets.yaml', 'w') as f:
@@ -210,6 +245,8 @@ class OpenShiftToAKSMigrator:
             job_list = []
             for job in jobs.items:
                 job_dict = client.ApiClient().sanitize_for_serialization(job)
+                job_dict.setdefault('kind', 'Job')
+                job_dict.setdefault('apiVersion', 'batch/v1')
                 job_list.append(job_dict)
             if job_list:
                 with open(output_path / 'jobs.yaml', 'w') as f:
@@ -225,6 +262,8 @@ class OpenShiftToAKSMigrator:
             cronjob_list = []
             for cj in cronjobs.items:
                 cj_dict = client.ApiClient().sanitize_for_serialization(cj)
+                cj_dict.setdefault('kind', 'CronJob')
+                cj_dict.setdefault('apiVersion', 'batch/v1')
                 cronjob_list.append(cj_dict)
             if cronjob_list:
                 with open(output_path / 'cronjobs.yaml', 'w') as f:
@@ -240,6 +279,8 @@ class OpenShiftToAKSMigrator:
             pvc_list = []
             for pvc in pvcs.items:
                 pvc_dict = client.ApiClient().sanitize_for_serialization(pvc)
+                pvc_dict.setdefault('kind', 'PersistentVolumeClaim')
+                pvc_dict.setdefault('apiVersion', 'v1')
                 pvc_list.append(pvc_dict)
             if pvc_list:
                 with open(output_path / 'pvcs.yaml', 'w') as f:
@@ -255,6 +296,8 @@ class OpenShiftToAKSMigrator:
             sa_list = []
             for sa in sas.items:
                 sa_dict = client.ApiClient().sanitize_for_serialization(sa)
+                sa_dict.setdefault('kind', 'ServiceAccount')
+                sa_dict.setdefault('apiVersion', 'v1')
                 sa_list.append(sa_dict)
             if sa_list:
                 with open(output_path / 'serviceaccounts.yaml', 'w') as f:
@@ -289,6 +332,8 @@ class OpenShiftToAKSMigrator:
                 if service.metadata.name == 'kubernetes':
                     continue
                 service_dict = client.ApiClient().sanitize_for_serialization(service)
+                service_dict.setdefault('kind', 'Service')
+                service_dict.setdefault('apiVersion', 'v1')
                 service_list.append(service_dict)
             if service_list:
                 with open(output_path / 'services.yaml', 'w') as f:
@@ -306,6 +351,8 @@ class OpenShiftToAKSMigrator:
                 if cm.metadata.name.startswith('kube-') or cm.metadata.name.startswith('openshift-'):
                     continue
                 cm_dict = client.ApiClient().sanitize_for_serialization(cm)
+                cm_dict.setdefault('kind', 'ConfigMap')
+                cm_dict.setdefault('apiVersion', 'v1')
                 configmap_list.append(cm_dict)
             if configmap_list:
                 with open(output_path / 'configmaps.yaml', 'w') as f:
@@ -325,6 +372,8 @@ class OpenShiftToAKSMigrator:
                     secret.metadata.name.startswith('builder-token-')):
                     continue
                 secret_dict = client.ApiClient().sanitize_for_serialization(secret)
+                secret_dict.setdefault('kind', 'Secret')
+                secret_dict.setdefault('apiVersion', 'v1')
                 secret_list.append(secret_dict)
             if secret_list:
                 with open(output_path / 'secrets.yaml', 'w') as f:
@@ -445,22 +494,18 @@ class OpenShiftToAKSMigrator:
         # Image registry rewrite for workloads
         try:
             if registry_rewrite and kind in ['Deployment', 'StatefulSet', 'Job', 'CronJob', 'DeploymentConfig']:
-                # DeploymentConfig: OpenShift, treat like Deployment
-                containers = []
-                if kind in ['Deployment', 'StatefulSet']:
+                containers: List[Dict[str, Any]] = []
+                if kind in ['Deployment', 'StatefulSet', 'DeploymentConfig']:
                     containers = resource.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 elif kind == 'Job':
                     containers = resource.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 elif kind == 'CronJob':
                     containers = resource.get('spec', {}).get('jobTemplate', {}).get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
-                elif kind == 'DeploymentConfig':
-                    containers = resource.get('spec', {}).get('template', {}).get('spec', {}).get('containers', [])
                 for c in containers:
                     image = c.get('image')
-                    if image and '/' in image:
-                        parts = image.split('/')
-                        parts[0] = registry_rewrite.rstrip('/')
-                        c['image'] = '/'.join(parts)
+                    if image:
+                        image_name = image.split('/')[-1]
+                        c['image'] = f"{registry_rewrite.rstrip('/')}/{image_name}"
         except Exception:
             pass
 
@@ -599,10 +644,12 @@ class OpenShiftToAKSMigrator:
             True if successful, False otherwise
         """
         # Load ACR credentials from .env if provided
-        acr_name = None
-        acr_login_server = None
-        acr_username = None
-        acr_password = None
+        acr_name: Optional[str] = None
+        acr_login_server: Optional[str] = None
+        acr_username: Optional[str] = None
+        acr_password: Optional[str] = None
+        ghcr_username: Optional[str] = os.getenv('GHCR_USERNAME')
+        ghcr_token: Optional[str] = os.getenv('GHCR_TOKEN')
         if acr_env_path and Path(acr_env_path).exists():
             self.logger.info(f"Loading ACR credentials from {acr_env_path}")
             with open(acr_env_path, 'r') as f:
@@ -620,6 +667,10 @@ class OpenShiftToAKSMigrator:
                             acr_username = val
                         elif key == 'ACR_ADMIN_PASSWORD':
                             acr_password = val
+                        elif key == 'GHCR_USERNAME' and not ghcr_username:
+                            ghcr_username = val
+                        elif key == 'GHCR_TOKEN' and not ghcr_token:
+                            ghcr_token = val
             # If registry_rewrite not set and ACR login server is available, use it
             if not registry_rewrite and acr_login_server:
                 registry_rewrite = acr_login_server
@@ -635,19 +686,21 @@ class OpenShiftToAKSMigrator:
         source_dir = Path(output_dir) / 'source'
         
         # ACR image import logic
-        if acr_name and acr_login_server and acr_username and acr_password:
-            self.logger.info("ACR credentials found. Extracting images from manifests for import.")
+        if acr_name and acr_login_server:
+            self.logger.info("ACR context found. Extracting images from manifests for import.")
             images = self.extract_images_from_manifests(source_dir)
             if images:
                 self.logger.info(f"Found {len(images)} unique image(s) in manifests: {images}")
-                self.logger.info("Importing images to ACR...")
-                self.import_images_to_acr(images, acr_login_server, acr_name, acr_username, acr_password)
-                self.logger.info("Image import complete.")
+                self.logger.info("Importing images to ACR (with GHCR auth if provided)...")
+                self.import_images_to_acr(images, acr_login_server, acr_name, ghcr_username, ghcr_token)
+                self.logger.info("Rewriting source manifests to use ACR image paths.")
+                self.rewrite_images_for_acr(source_dir, acr_login_server)
+                self.logger.info("Image import & rewrite phase complete.")
             else:
                 self.logger.info("No images found in manifests.")
         else:
             if acr_env_path:
-                self.logger.warning("ACR credentials incomplete in .env. Skipping image import.")
+                self.logger.warning("ACR details incomplete. Skipping image import.")
 
         # Transform Deployments
         if (source_dir / 'deployments.yaml').exists():
